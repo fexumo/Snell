@@ -597,6 +597,8 @@ resetConfigState(){
 }
 
 writeConfig(){
+    if [ ${#psk} -lt 16 ] || [ ${#psk} -gt 255 ]; then fail "密钥必须为 16-255 位"; return 1; fi
+    case "$psk" in *[!A-Za-z0-9._~-]*) fail "密钥包含不安全字符"; return 1 ;; esac
     mkdir -p "$snell_dir" || fail "无法创建 Snell 配置目录" || return 1
     local tmp_conf custom_configs other_sections
     tmp_conf=$(mktemp "${snell_conf}.tmp.XXXXXX") || fail "无法创建临时配置文件" || return 1
@@ -687,7 +689,7 @@ readConfig(){
     [ ${#psk} -le 255 ] || { fail "Snell 配置中的密钥过长"; return 1; }
     case "$tfo" in true|false) ;; *) fail "Snell 配置中的 tfo 无效"; return 1 ;; esac
     if [ "$ver" = "6" ]; then
-        [ ${#psk} -ge 16 ] || { fail "Snell v6 密钥不能少于 16 位"; return 1; }
+        [ ${#psk} -ge 12 ] || { fail "Snell v6 密钥不能少于官方要求的 12 字节"; return 1; }
         [ -n "$dns_ip_pref" ] || dns_ip_pref="default"
         [ -n "$mode" ] || mode="default"
         case "$dns_ip_pref" in default|prefer-ipv4|prefer-ipv6|ipv4-only|ipv6-only) ;; *) fail "DNS IP 偏好无效"; return 1 ;; esac
@@ -769,19 +771,18 @@ setIpv6(){
     local current_opt=2
     [ "$ipv6" = "true" ] && current_opt=1
     while true; do
-        chooseOption "IPv6 解析" "$current_opt" 2 " 1) 开启" " 2) 关闭"
+        chooseOption "目标域名 IPv6 解析" "$current_opt" 2 " 1) 开启" " 2) 关闭"
         case "$REPLY" in
             1) ipv6=true; break ;;
             2) ipv6=false; break ;;
             *) echo -e "${Error} 输入无效，仅支持 1 或 2" ;;
         esac
     done
-    showSettingResult "IPv6 解析 开启状态：${Red_background_prefix} ${ipv6} ${Font_color_suffix}"
+    showSettingResult "目标域名 IPv6 解析：${Red_background_prefix} ${ipv6} ${Font_color_suffix}"
 }
 
 setPSK(){
-    local min=1
-    [ "$ver" = "6" ] && min=16
+    local min=16
     echo "密钥设置（回车生成随机密钥；已有密钥回车保留）"
     while true; do
         if [ -n "$psk" ]; then readInput "请输入密钥（已有密钥，回车保留）："; else readInput "请输入密钥（回车随机生成）："; fi
@@ -867,7 +868,7 @@ setDNSIPPref(){
     local current_opt=1
     case "$dns_ip_pref" in prefer-ipv4) current_opt=2 ;; prefer-ipv6) current_opt=3 ;; ipv4-only) current_opt=4 ;; ipv6-only) current_opt=5 ;; esac
     while true; do
-        chooseOption "DNS IP 偏好" "$current_opt" 1 " 1) default" " 2) prefer-ipv4" " 3) prefer-ipv6" " 4) ipv4-only" " 5) ipv6-only"
+        chooseOption "目标地址 DNS IP 偏好" "$current_opt" 1 " 1) default" " 2) prefer-ipv4" " 3) prefer-ipv6" " 4) ipv4-only" " 5) ipv6-only"
         case "$REPLY" in
             1) dns_ip_pref=default; break ;;
             2) dns_ip_pref=prefer-ipv4; break ;;
@@ -877,7 +878,7 @@ setDNSIPPref(){
             *) echo -e "${Error} 输入无效，仅支持 1 到 5" ;;
         esac
     done
-    showSettingResult "DNS IP 偏好 状态：${Red_background_prefix} ${dns_ip_pref} ${Font_color_suffix}"
+    showSettingResult "目标地址 DNS IP 偏好：${Red_background_prefix} ${dns_ip_pref} ${Font_color_suffix}"
 }
 
 setMode(){
@@ -1100,12 +1101,12 @@ setConfig(){
         if [ "$cver" != "6" ]; then
             echo " 3) 设置 OBFS"
             echo " 4) 设置 OBFS 域名"
-            echo " 5) 设置 IPv6 解析"
+            echo " 5) 设置目标域名 IPv6 解析"
         fi
         echo " 6) 设置 TCP Fast Open"
         echo " 7) 切换协议版本"
         if [ "$cver" = "6" ]; then
-            echo " 8) 设置 DNS IP 偏好"
+            echo " 8) 设置目标地址 DNS IP 偏好"
             echo " 9) 设置混淆模式"
         fi
         echo "10) 设置全部配置"
@@ -1131,7 +1132,7 @@ setConfig(){
                 fi
                 ;;
             8)
-                [ "$cver" = "6" ] || { echo -e "${Error} 当前版本不是 Snell v6，不支持 DNS IP 偏好配置！"; sleep 1; continue; }
+                [ "$cver" = "6" ] || { echo -e "${Error} 当前版本不是 Snell v6，不支持目标地址 DNS IP 偏好配置！"; sleep 1; continue; }
                 applyConfigChange setDNSIPPref
                 ;;
             9)
@@ -1297,9 +1298,9 @@ viewConfig(){
     if [ "$ver" != "6" ]; then
         echo "OBFS      : ${obfs}"
         [ "$obfs" != "off" ] && [ -n "$host" ] && echo "域名      : ${host}"
-        echo "IPv6      : ${ipv6}"
+        echo "目标 IPv6 : ${ipv6}"
     else
-        echo "DNS IP    : ${dns_ip_pref}"
+        echo "目标 DNS  : ${dns_ip_pref}"
         echo "模式      : ${mode}"
     fi
     [ -n "$egress_interface" ] && echo "出口网卡  : ${egress_interface}"
