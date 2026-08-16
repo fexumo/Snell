@@ -115,11 +115,12 @@ sysArch(){
 
 installDependencies(){
     if [ "$release" = "alpine" ]; then
-        apk add --no-cache curl unzip tzdata gcompat upx iproute2 >/dev/null 2>&1 || fail "依赖安装失败"
+        apk add --no-cache curl unzip file tzdata gcompat upx iproute2 >/dev/null 2>&1 || fail "依赖安装失败"
     elif [ "$release" = "debian" ]; then
         local packages=""
         command -v curl >/dev/null 2>&1 || packages="$packages curl"
         command -v unzip >/dev/null 2>&1 || packages="$packages unzip"
+        command -v file >/dev/null 2>&1 || packages="$packages file"
         command -v ss >/dev/null 2>&1 || packages="$packages iproute2"
         [ -f /etc/ssl/certs/ca-certificates.crt ] || packages="$packages ca-certificates"
         if [ -n "$packages" ]; then
@@ -144,7 +145,7 @@ checkInstalledStatus(){
 }
 
 serviceBackend(){
-    if [ -f /etc/systemd/system/snell-server.service ] && command -v systemctl >/dev/null 2>&1; then
+    if [ -f /etc/systemd/system/snell-server.service ] && command -v systemctl >/dev/null 2>&1 && systemctl show --property=Version >/dev/null 2>&1; then
         echo systemd
     elif [ -f /etc/init.d/snell-server ] && command -v rc-service >/dev/null 2>&1; then
         echo openrc
@@ -193,27 +194,34 @@ waitServiceStart(){
 }
 
 stopOrphanedProcesses(){
-    local proc pid cmd
+    local proc pid cmd pids="" i=0 alive
     for proc in /proc/[0-9]*/cmdline; do
         [ -r "$proc" ] || continue
         cmd=$(tr '\0' ' ' < "$proc" 2>/dev/null)
         case "$cmd" in
             *"${snell_bin}"*"${snell_conf}"*)
-                pid=${proc#/proc/}
-                pid=${pid%/cmdline}
-                kill "$pid" 2>/dev/null
+                pid=${proc#/proc/}; pid=${pid%/cmdline}
+                kill "$pid" 2>/dev/null && pids="$pids $pid"
                 ;;
         esac
     done
+    while [ "$i" -lt 5 ]; do
+        alive=""
+        for pid in $pids; do kill -0 "$pid" 2>/dev/null && alive="$alive $pid"; done
+        [ -z "$alive" ] && return 0
+        pids="$alive"; sleep 1; i=$((i + 1))
+    done
+    for pid in $pids; do kill -9 "$pid" 2>/dev/null || true; done
+    sleep 1
+    for pid in $pids; do kill -0 "$pid" 2>/dev/null && return 1; done
 }
 
 removeServiceAccount(){
-    if [ "$release" = "debian" ]; then
-        userdel "$snell_user" >/dev/null 2>&1 || true
-        groupdel "$snell_user" >/dev/null 2>&1 || true
-    else
-        deluser "$snell_user" >/dev/null 2>&1 || true
-        delgroup "$snell_user" >/dev/null 2>&1 || true
+    if id "$snell_user" >/dev/null 2>&1; then
+        if [ "$release" = "debian" ]; then userdel "$snell_user" >/dev/null 2>&1 || return 1; else deluser "$snell_user" >/dev/null 2>&1 || return 1; fi
+    fi
+    if grep -q "^${snell_user}:" /etc/group; then
+        if [ "$release" = "debian" ]; then groupdel "$snell_user" >/dev/null 2>&1 || return 1; else delgroup "$snell_user" >/dev/null 2>&1 || return 1; fi
     fi
 }
 
@@ -231,7 +239,7 @@ setupServiceUser(){
             return 0
         fi
         [ -f "$snell_marker" ] || fail "系统已存在非本脚本创建的 ${snell_user} 用户" || return 1
-        removeServiceAccount
+        removeServiceAccount || return 1
         group_exists=false
     elif [ "$group_exists" = true ] && [ ! -f "$snell_marker" ]; then
         fail "系统已存在非本脚本创建的 ${snell_user} 组"
@@ -303,12 +311,16 @@ pidfile="/run/${RC_SVCNAME}.pid"
 logfile="/var/log/snell-server.log"
 
 is_snell_pid() {
-    local pid="$1"
+    local pid="$1" cmd
     case "$pid" in
         ''|*[!0-9]*) return 1 ;;
     esac
     [ -r "/proc/${pid}/cmdline" ] || return 1
-    tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null | grep -q 'snell-server'
+    cmd=$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null)
+    case "$cmd" in
+        *'/usr/local/bin/snell-server'*'-c /etc/snell/config.conf'*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 start() {
@@ -383,7 +395,7 @@ cleanupFailedInstall(){
         systemd) systemctl disable snell-server >/dev/null 2>&1 ;;
         openrc) rc-update del snell-server default >/dev/null 2>&1 ;;
     esac
-    removeServiceUser
+    removeServiceUser || true
     rm -f "$snell_bin" /etc/systemd/system/snell-server.service /etc/systemd/system/multi-user.target.wants/snell-server.service /etc/init.d/snell-server
     rm -rf "$snell_dir"
     command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload >/dev/null 2>&1
@@ -397,7 +409,7 @@ ensureServiceSecurity(){
         openrc) rc-update show default 2>/dev/null | grep -q '^[[:space:]]*snell-server[[:space:]]' && was_enabled=true ;;
     esac
     if [ -f "$snell_marker" ] && id "$snell_user" >/dev/null 2>&1 && \
-       [ "$(stat -c %U "$snell_conf" 2>/dev/null)" = "$snell_user" ]; then
+       [ "$(stat -c %U:%G:%a "$snell_conf" 2>/dev/null)" = "root:${snell_user}:640" ]; then
         if [ "$release" = "debian" ] && grep -q "^User=${snell_user}$" /etc/systemd/system/snell-server.service 2>/dev/null && \
            grep -q '^NoNewPrivileges=true$' /etc/systemd/system/snell-server.service 2>/dev/null; then
             return 0
@@ -409,8 +421,8 @@ ensureServiceSecurity(){
     checkStatus
     [ "$status" = "running" ] && was_running=true
     setupServiceUser || return 1
-    chown "${snell_user}:${snell_user}" "$snell_conf" || return 1
-    chmod 600 "$snell_conf" || return 1
+    chown "root:${snell_user}" "$snell_conf" || return 1
+    chmod 640 "$snell_conf" || return 1
     setupService || return 1
     if [ "$was_enabled" != true ]; then
         case "$(serviceBackend)" in
@@ -452,6 +464,10 @@ compareVersions(){
 
 getSnellDownloadUrl(){
     sysArch || return 1
+    if [ "$arch" = "armv7l" ] && [ "${1%%.*}" = "6" ]; then
+        fail "Snell v6 官方未提供 Linux armv7l 构建"
+        return 1
+    fi
     snell_url="https://dl.nssurge.com/snell/snell-server-v${1}-linux-${arch}.zip"
 }
 
@@ -518,45 +534,60 @@ pickVersion(){
 }
 
 installFromZip(){
-    local version="$1" label="$2" url="$3" tmp_dir zip_file version_tmp
+    local version="$1" label="$2" url="$3" target="${4:-$snell_bin}"
+    local tmp_dir zip_file binary entries kind expected actual size
     tmp_dir=$(mktemp -d /tmp/snell-install.XXXXXX) || fail "无法创建临时目录" || return 1
     zip_file="${tmp_dir}/snell-server.zip"
-    if ! curl -fsSL --proto '=https' --tlsv1.2 --retry 2 --retry-delay 1 --max-time 60 -o "$zip_file" "$url" >/dev/null 2>&1; then
-        rm -rf "$tmp_dir"
-        fail "Snell Server ${Yellow_font_prefix}${label}${Font_color_suffix} 下载失败！"
-        return 1
+    if ! curl -fsSL --proto '=https' --tlsv1.2 --retry 2 --retry-delay 1 --max-time 60 --max-filesize 52428800 -o "$zip_file" "$url" >/dev/null 2>&1; then
+        rm -rf "$tmp_dir"; fail "Snell Server ${Yellow_font_prefix}${label}${Font_color_suffix} 下载失败！"; return 1
     fi
-    if ! unzip -oq "$zip_file" -d "$tmp_dir" >/dev/null 2>&1 || [ ! -f "${tmp_dir}/snell-server" ] || [ -L "${tmp_dir}/snell-server" ]; then
-        rm -rf "$tmp_dir"
-        fail "Snell Server ${Yellow_font_prefix}${label}${Font_color_suffix} 解压失败！"
-        return 1
+    case "$version:$arch" in
+        5.0.1:i386) expected=6a3e30928315427d6f747f26408d0f74eb88f460344d0e1fcb3f7c32c708a09d ;;
+        5.0.1:armv7l) expected=14489f3e857569c8835dd3598b7ea6bca5371d4290ac7cf0f6c8dfb3381c1fb2 ;;
+        5.0.1:aarch64) expected=2f178bf5ac468ce1a130454efa40a0603fbbe4e47ecc4880a989f4abc7f824cf ;;
+        5.0.1:amd64) expected=9bea1c2b9e35b73b31634856c04d18c393072b9e5dcde6a32781d8b8f908c539 ;;
+        6.0.0rc2:i386) expected=67060ef79ac4ef0bb64c520302396620b3a06f8f6d5ceb450be283e4fa749335 ;;
+        6.0.0rc2:aarch64) expected=a0b2915cbc77dc3baf8fa069e741c20808d8a10c3a8a93e709a0a580645c3bd7 ;;
+        6.0.0rc2:amd64) expected=8a9c4463ca87cfa5eaa37c6af0d37ab93ea275aa12391985bb2a375ca3abd7f2 ;;
+        *) expected="" ;;
+    esac
+    if [ -n "$expected" ]; then
+        actual=$(sha256sum "$zip_file" | awk '{print $1}')
+        [ "$actual" = "$expected" ] || { rm -rf "$tmp_dir"; fail "下载包 SHA-256 校验失败"; return 1; }
     fi
-    chmod +x "${tmp_dir}/snell-server" || { rm -rf "$tmp_dir"; return 1; }
-    if [ "$release" = "alpine" ] && command -v upx >/dev/null 2>&1 && strings "${tmp_dir}/snell-server" 2>/dev/null | grep -q "UPX!"; then
-        if upx -d -o "${tmp_dir}/snell-server.unpacked" "${tmp_dir}/snell-server" >/dev/null 2>&1; then
-            mv -f "${tmp_dir}/snell-server.unpacked" "${tmp_dir}/snell-server"
-            chmod +x "${tmp_dir}/snell-server"
-        else
-            rm -rf "$tmp_dir"
-            fail "Snell Server 解包失败"
-            return 1
-        fi
+    entries=$(unzip -Z1 "$zip_file" 2>/dev/null)
+    size=$(unzip -l "$zip_file" 2>/dev/null | awk '$4=="snell-server"{print $1;exit}')
+    if [ "$entries" != "snell-server" ]; then rm -rf "$tmp_dir"; fail "下载包结构无效"; return 1; fi
+    case "$size" in ''|*[!0-9]*) size=0 ;; esac
+    if [ "$size" -le 0 ] || [ "$size" -gt 52428800 ]; then rm -rf "$tmp_dir"; fail "下载包解压大小异常"; return 1; fi
+    if ! unzip -oq "$zip_file" -d "$tmp_dir" >/dev/null 2>&1; then rm -rf "$tmp_dir"; fail "Snell Server 解压失败"; return 1; fi
+    binary="${tmp_dir}/snell-server"
+    if [ ! -f "$binary" ] || [ -L "$binary" ]; then rm -rf "$tmp_dir"; fail "下载包内容无效"; return 1; fi
+    if [ "$release" = "alpine" ] && upx -t "$binary" >/dev/null 2>&1; then
+        if ! upx -d -o "${binary}.raw" "$binary" >/dev/null 2>&1 || ! mv -f "${binary}.raw" "$binary"; then rm -rf "$tmp_dir"; fail "Snell Server 解包失败"; return 1; fi
     fi
-    mkdir -p "$snell_dir" || { rm -rf "$tmp_dir"; return 1; }
-    version_tmp=$(mktemp "${snell_version_file}.tmp.XXXXXX") || { rm -rf "$tmp_dir"; return 1; }
-    printf 'v%s\n' "$version" > "$version_tmp" || { rm -f "$version_tmp"; rm -rf "$tmp_dir"; return 1; }
-    if ! mv -f "${tmp_dir}/snell-server" "$snell_bin"; then
-        rm -f "$version_tmp"; rm -rf "$tmp_dir"; fail "无法安装 Snell Server 主程序"; return 1
-    fi
-    if ! mv -f "$version_tmp" "$snell_version_file"; then
-        rm -f "$version_tmp"; rm -rf "$tmp_dir"; fail "无法记录 Snell Server 版本"; return 1
-    fi
+    kind=$(file -b "$binary" 2>/dev/null)
+    case "$arch:$kind" in
+        amd64:*ELF*x86-64*|i386:*ELF*80386*|aarch64:*ELF*aarch64*|armv7l:*ELF*ARM*) ;;
+        *) rm -rf "$tmp_dir"; fail "下载的二进制类型或架构不匹配"; return 1 ;;
+    esac
+    chown root:root "$binary" 2>/dev/null || true
+    chmod 0755 "$binary" || { rm -rf "$tmp_dir"; return 1; }
+    if ! mkdir -p "$(dirname "$target")" || ! mv -f "$binary" "$target"; then rm -rf "$tmp_dir"; fail "无法安装 Snell Server 主程序"; return 1; fi
     rm -rf "$tmp_dir"
+}
+
+recordInstalledVersion(){
+    local tmp
+    mkdir -p "$snell_dir" || return 1
+    tmp=$(mktemp "${snell_version_file}.tmp.XXXXXX") || return 1
+    if ! printf 'v%s\n' "$1" > "$tmp" || ! chmod 0644 "$tmp" || ! mv -f "$tmp" "$snell_version_file"; then rm -f "$tmp"; return 1; fi
 }
 
 downloadSnell(){
     getSnellDownloadUrl "$1" || return 1
-    installFromZip "$1" "$2" "$snell_url"
+    installFromZip "$1" "$2" "$snell_url" "${3:-$snell_bin}" || return 1
+    if [ -z "${3:-}" ]; then recordInstalledVersion "$1"; fi
 }
 
 # Config
@@ -567,9 +598,12 @@ resetConfigState(){
 
 writeConfig(){
     mkdir -p "$snell_dir" || fail "无法创建 Snell 配置目录" || return 1
-    local tmp_conf
+    local tmp_conf custom_configs other_sections
     tmp_conf=$(mktemp "${snell_conf}.tmp.XXXXXX") || fail "无法创建临时配置文件" || return 1
-    chmod 600 "$tmp_conf" || { rm -f "$tmp_conf"; fail "无法保护临时配置文件"; return 1; }
+    chmod 640 "$tmp_conf" || { rm -f "$tmp_conf"; fail "无法保护临时配置文件"; return 1; }
+    if id "$snell_user" >/dev/null 2>&1; then
+        chown "root:${snell_user}" "$tmp_conf" || { rm -f "$tmp_conf"; fail "无法设置配置文件属主"; return 1; }
+    fi
     {
         printf '%s\n' "[snell-server]"
         printf '%s\n' "listen = ${listen_val}"
@@ -597,24 +631,21 @@ writeConfig(){
     } > "$tmp_conf" || { rm -f "$tmp_conf"; fail "无法生成 Snell 配置"; return 1; }
 
     if [ -f "$snell_conf" ]; then
-        custom_configs=$(awk -F '=' '
-            /^[[:space:]]*\[/ { in_snell = ($0 ~ /^[[:space:]]*\[snell-server\][[:space:]]*$/); if (!in_snell) print $0; next }
-            !in_snell { if ($0 !~ /^[[:space:]]*$/) print $0; next }
-            /^[[:space:]]*#/ { next }
-            {
-                key=$1; sub(/^[[:space:]]+/, "", key); sub(/[[:space:]]+$/, "", key)
-                if (key != "listen" && key != "ipv6" && key != "psk" && key != "obfs" && key != "obfs-host" && key != "tfo" && key != "dns-ip-preference" && key != "mode" && key != "version" && key != "egress-interface" && NF > 0 && $0 !~ /^[[:space:]]*$/) print $0
+        custom_configs=$(awk -F= '
+            /^[[:space:]]*\[/ { in_snell=($0 ~ /^[[:space:]]*\[snell-server\][[:space:]]*$/); next }
+            in_snell && $0 !~ /^[[:space:]#]*$/ {
+                key=$1; gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+                if (key !~ /^(listen|ipv6|psk|obfs|obfs-host|tfo|dns-ip-preference|mode|version|egress-interface)$/) print
             }
         ' "$snell_conf")
-        if [ -n "$custom_configs" ]; then
-            printf '\n%s\n%s\n' "# Custom Configs" "$custom_configs" >> "$tmp_conf"
-        fi
+        other_sections=$(awk '
+            /^[[:space:]]*\[/ { in_snell=($0 ~ /^[[:space:]]*\[snell-server\][[:space:]]*$/); if (!in_snell) print; next }
+            !in_snell { print }
+        ' "$snell_conf")
+        [ -z "$custom_configs" ] || printf '\n# Custom Snell Configs\n%s\n' "$custom_configs" >> "$tmp_conf"
+        [ -z "$other_sections" ] || printf '\n%s\n' "$other_sections" >> "$tmp_conf"
     fi
     mv -f "$tmp_conf" "$snell_conf" || { rm -f "$tmp_conf"; fail "无法替换 Snell 配置文件"; return 1; }
-    chmod 600 "$snell_conf" || fail "无法设置配置文件权限" || return 1
-    if id "$snell_user" >/dev/null 2>&1; then
-        chown "${snell_user}:${snell_user}" "$snell_conf" || fail "无法设置配置文件属主" || return 1
-    fi
 }
 
 readConfig(){
@@ -651,16 +682,26 @@ readConfig(){
     rm -f "$conf_tmp"
     [ -n "$listen_val" ] && [ -n "$port" ] && [ -n "$psk" ] || fail "Snell 配置缺少 listen 或 psk" || return 1
     case "$ver" in 5|6) ;; *) fail "Snell 配置中的 version 无效，仅支持 5 或 6"; return 1 ;; esac
-    printf '%s' "$port" | grep -qE '^[0-9]+$' && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail "Snell 配置中的监听端口无效" || return 1
+    if ! printf '%s' "$port" | grep -qE '^[0-9]+$' || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then fail "Snell 配置中的监听端口无效"; return 1; fi
+    case "$psk" in *[!A-Za-z0-9._~-]*) fail "Snell 配置中的密钥包含不安全字符"; return 1 ;; esac
+    [ ${#psk} -le 255 ] || { fail "Snell 配置中的密钥过长"; return 1; }
+    case "$tfo" in true|false) ;; *) fail "Snell 配置中的 tfo 无效"; return 1 ;; esac
     if [ "$ver" = "6" ]; then
+        [ ${#psk} -ge 16 ] || { fail "Snell v6 密钥不能少于 16 位"; return 1; }
         [ -n "$dns_ip_pref" ] || dns_ip_pref="default"
         [ -n "$mode" ] || mode="default"
+        case "$dns_ip_pref" in default|prefer-ipv4|prefer-ipv6|ipv4-only|ipv6-only) ;; *) fail "DNS IP 偏好无效"; return 1 ;; esac
+        case "$mode" in default|unshaped|unsafe-raw) ;; *) fail "Snell v6 模式无效"; return 1 ;; esac
+    else
+        case "$ipv6:$obfs" in true:off|true:tls|true:http|false:off|false:tls|false:http) ;; *) fail "Snell v5 配置值无效"; return 1 ;; esac
     fi
     return 0
 }
 
 checkPskForV6(){
-    [ ${#psk} -ge 16 ] && [ ${#psk} -le 255 ] && return 0
+    if [ ${#psk} -ge 16 ] && [ ${#psk} -le 255 ]; then
+        case "$psk" in *[!A-Za-z0-9._~-]*) ;; *) return 0 ;; esac
+    fi
     echo -e "${Error} 当前密钥长度为 ${#psk}，不符合 Snell v6 要求（16-255 位）"
     echo " 1) 自动生成随机密钥"
     echo " 2) 手动输入新密钥"
@@ -671,8 +712,10 @@ checkPskForV6(){
             2)
                 while true; do
                     readInput "请输入新的密钥 [16-255 位]: "
-                    [ ${#REPLY} -ge 16 ] && [ ${#REPLY} -le 255 ] && { psk=$REPLY; return 0; }
-                    echo -e "${Error} 密钥长度必须在 16 到 255 位之间！"
+                    if [ ${#REPLY} -ge 16 ] && [ ${#REPLY} -le 255 ]; then
+                        case "$REPLY" in *[!A-Za-z0-9._~-]*) ;; *) psk=$REPLY; return 0 ;; esac
+                    fi
+                    echo -e "${Error} 密钥需为 16-255 位安全字符！"
                 done
                 ;;
             *) echo -e "${Error} 输入无效，仅支持 1 或 2" ;;
@@ -737,37 +780,17 @@ setIpv6(){
 }
 
 setPSK(){
+    local min=1
+    [ "$ver" = "6" ] && min=16
     echo "密钥设置（回车生成随机密钥；已有密钥回车保留）"
-    if [ "$ver" = "6" ]; then
-        echo -e "${Tip} Snell v6 密钥长度要求：16-255 位"
-        while true; do
-            if [ -n "$psk" ]; then
-                readInput "请输入密钥（已有密钥，回车保留）："
-            else
-                readInput "请输入密钥（回车随机生成）："
-            fi
-            if [ -z "$REPLY" ] && [ -n "$psk" ]; then
-                break
-            elif [ -z "$REPLY" ]; then
-                psk=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20); break
-            elif [ ${#REPLY} -ge 16 ] && [ ${#REPLY} -le 255 ]; then
-                psk=$REPLY; break
-            else
-                echo -e "${Error} 密钥长度必须在 16 到 255 位之间"
-            fi
-        done
-    else
-        if [ -n "$psk" ]; then
-            readInput "请输入密钥（已有密钥，回车保留）："
-        else
-            readInput "请输入密钥（回车随机生成）："
+    while true; do
+        if [ -n "$psk" ]; then readInput "请输入密钥（已有密钥，回车保留）："; else readInput "请输入密钥（回车随机生成）："; fi
+        [ -n "$REPLY" ] || { [ -n "$psk" ] && REPLY=$psk || REPLY=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20); }
+        if [ ${#REPLY} -ge "$min" ] && [ ${#REPLY} -le 255 ]; then
+            case "$REPLY" in *[!A-Za-z0-9._~-]*) ;; *) psk=$REPLY; break ;; esac
         fi
-        if [ -z "$REPLY" ] && [ -z "$psk" ]; then
-            psk=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 16)
-        elif [ -n "$REPLY" ]; then
-            psk=$REPLY
-        fi
-    fi
+        echo -e "${Error} 密钥需为 ${min}-255 位，且仅允许字母、数字及 . _ ~ -"
+    done
     showSettingResult "密钥已设置"
 }
 
@@ -783,7 +806,7 @@ setHost(){
             host="${host:-www.wechat.com}"; break
         fi
         case "$REPLY" in
-            *[!A-Za-z0-9.-]*) echo -e "${Error} 域名格式无效，请勿包含空格或特殊字符" ;;
+            .*|*..*|*.|-*|*.-*|*-.*|*-|*[!A-Za-z0-9.-]*) echo -e "${Error} 域名格式无效" ;;
             *) host="$REPLY"; break ;;
         esac
     done
@@ -882,44 +905,44 @@ collectVersionSettings(){
 }
 
 # Workflow
-captureServiceState(){
-    service_was_running=false
-    checkStatus
-    [ "$status" = "running" ] && service_was_running=true
-}
-
-replaceServerBinary(){
-    captureServiceState
-    if [ "$service_was_running" = true ] && ! svc stop; then
-        fail "无法停止当前服务"
-        return 1
-    fi
-    downloadSnell "$1" "$2"
-}
-
-restoreServiceState(){
-    if [ "$service_was_running" != true ]; then
-        ok "$2"
-        return 0
-    fi
-    if svc start && waitServiceStart; then
-        ok "$1"
-    else
-        echo -e "${Error} 服务启动失败，以下为错误日志："
-        showServiceLog
-        return 1
-    fi
+rollbackBinaryChange(){
+    local failed=false
+    trap - HUP INT TERM
+    svc stop >/dev/null 2>&1 || true
+    mv -f "$transaction/server" "$snell_bin" || failed=true
+    mv -f "$transaction/config" "$snell_conf" || failed=true
+    if [ -f "$transaction/version" ]; then mv -f "$transaction/version" "$snell_version_file" || failed=true; else rm -f "$snell_version_file" || failed=true; fi
+    chmod 0755 "$snell_bin" 2>/dev/null || failed=true
+    chmod 640 "$snell_conf" 2>/dev/null || failed=true
+    chown "root:${snell_user}" "$snell_conf" 2>/dev/null || failed=true
+    if [ "$service_was_running" = true ] && { ! svc start || ! waitServiceStart; }; then showServiceLog; failed=true; fi
+    rm -rf "$transaction"
+    [ "$failed" = false ] && ok "已恢复旧版本及原运行状态"
+    [ "$failed" = false ]
 }
 
 applyBinaryChange(){
     local version="$1" label="$2" ok_msg="$3" stop_msg="$4"
-    replaceServerBinary "$version" "$label" || {
-        echo -e "${Error} 下载失败，已保持当前版本"
-        restoreServiceState "已恢复当前版本服务" "服务保持停止状态"
-        return 1
-    }
-    writeConfig || fail "配置写入失败" || return 1
-    restoreServiceState "$ok_msg" "$stop_msg"
+    installDependencies || return 1
+    transaction=$(mktemp -d "$(dirname "$snell_bin")/.snell-transaction.XXXXXX") || fail "无法创建事务目录" || return 1
+    if ! downloadSnell "$version" "$label" "$transaction/new" ||
+       ! cp -p "$snell_bin" "$transaction/server" || ! cp -p "$snell_conf" "$transaction/config"; then
+        rm -rf "$transaction"; fail "准备更新失败，当前版本未受影响"; return 1
+    fi
+    if [ -f "$snell_version_file" ] && ! cp -p "$snell_version_file" "$transaction/version"; then rm -rf "$transaction"; return 1; fi
+    service_was_running=false
+    checkStatus || { rm -rf "$transaction"; fail "无法确认服务状态，已取消更新"; return 1; }
+    [ "$status" = "running" ] && service_was_running=true
+    trap 'echo; echo -e "${Error} 操作中断，正在回滚"; rollbackBinaryChange; exit 130' HUP INT TERM
+    if { [ "$service_was_running" = true ] && ! svc stop; } ||
+       ! mv -f "$transaction/new" "$snell_bin" || ! recordInstalledVersion "$version" || ! writeConfig; then
+        echo -e "${Error} 更新失败，正在回滚"; rollbackBinaryChange; return 1
+    fi
+    if [ "$service_was_running" = true ] && { ! svc start || ! waitServiceStart; }; then
+        echo -e "${Error} 新版本启动失败，正在回滚"; showServiceLog; rollbackBinaryChange; return 1
+    fi
+    trap - HUP INT TERM; rm -rf "$transaction"
+    if [ "$service_was_running" = true ]; then ok "$ok_msg"; else ok "$stop_msg"; fi
 }
 
 runWorkflow(){
@@ -951,7 +974,6 @@ runWorkflow(){
             collectVersionSettings
             applyBinaryChange "$(pickVersion "$target")" "Snell v${target} 版本" "Snell Server 重启完毕！" "版本切换完成，服务保持停止状态" || {
                 ver=$current
-                writeConfig
                 return 1
             }
             ;;
@@ -1003,6 +1025,7 @@ restartSnell(){
     else
         fail "Snell Server 重启后未运行"
         showServiceLog
+        return 1
     fi
     sleep 1
 }
@@ -1031,10 +1054,24 @@ installSnell(){
 }
 
 applyConfigChange(){
+    local backup running=false
     simpleHeader
-    "$1" || fail "配置项设置失败" || return 1
-    writeConfig || return 1
-    restartSnell
+    if [ "$1" != ":" ]; then "$1" || fail "配置项设置失败" || return 1; fi
+    backup=$(mktemp "${snell_conf}.backup.XXXXXX") || return 1
+    cp -p "$snell_conf" "$backup" || { rm -f "$backup"; return 1; }
+    checkStatus || { rm -f "$backup"; fail "无法确认服务状态"; return 1; }
+    [ "$status" = "running" ] && running=true
+    if ! writeConfig; then
+        mv -f "$backup" "$snell_conf" || fail "配置写入失败且无法恢复旧配置"
+        return 1
+    fi
+    if [ "$running" = true ] && ! restartSnell; then
+        if ! mv -f "$backup" "$snell_conf"; then fail "无法恢复旧配置"; return 1; fi
+        if ! svc restart || ! waitServiceStart; then fail "旧配置已恢复，但服务启动失败"; fi
+        return 1
+    fi
+    rm -f "$backup"
+    if [ "$running" != true ]; then ok "配置已保存，服务保持停止状态"; fi
 }
 
 confirmVersionSwitch(){
@@ -1090,7 +1127,7 @@ setConfig(){
                 if [ "$ver" != "$cver" ]; then
                     runWorkflow switch "$ver" "$cver"
                 else
-                    writeConfig && restartSnell
+                    applyConfigChange :
                 fi
                 ;;
             8)
@@ -1110,7 +1147,7 @@ setConfig(){
                     runWorkflow switch "$ver" "$cver"
                 else
                     collectVersionSettings
-                    writeConfig && restartSnell
+                    applyConfigChange :
                 fi
                 ;;
             *) echo -e "${Error} 请输入正确数字${Yellow_font_prefix}[1-10]${Font_color_suffix}"; sleep 1 ;;
@@ -1178,29 +1215,37 @@ uninstallSnell(){
         systemd) systemctl disable snell-server 2>/dev/null ;;
         openrc) rc-update del snell-server default 2>/dev/null ;;
     esac
-    stopOrphanedProcesses
-    ok "移除主程序"; rm -rf "$snell_bin"
-    ok "移除服务文件"
-    rm -f /etc/systemd/system/snell-server.service /etc/init.d/snell-server
+    stopOrphanedProcesses || { fail "仍有 Snell 进程无法终止"; return 1; }
+    rm -f "$snell_bin" /etc/systemd/system/snell-server.service /etc/systemd/system/multi-user.target.wants/snell-server.service /etc/init.d/snell-server || return 1
     command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload >/dev/null 2>&1
-    ok "移除系统用户"; removeServiceUser
-    ok "移除配置文件及版本记录"; rm -rf /etc/snell
-    ok "清理运行时文件"; rm -f /run/snell-server.pid /var/log/snell-server.log
+    removeServiceUser || { fail "无法移除系统用户"; return 1; }
+    rm -rf /etc/snell || return 1
+    rm -f /run/snell-server.pid /var/log/snell-server.log || return 1
+    hasSnellArtifacts && { fail "卸载后仍有残留"; return 1; }
     echo; echo -e "${Green_font_prefix}Snell Server 卸载完成！${Font_color_suffix}"; echo
     sleep 1
 }
 
 getIpv4(){
     for src in https://ipinfo.io/ip https://api.ip.sb/ip https://members.3322.org/dyndns/getip; do
-        ipv4=$(curl -fsSL4 --connect-timeout 2 --max-time 5 "$src" 2>/dev/null)
-        [ -n "$ipv4" ] && return 0
+        ipv4=$(curl -fsSL4 --connect-timeout 2 --max-time 5 "$src" 2>/dev/null | sed -n '1{s/[[:space:]]//g;p;q;}')
+        printf '%s\n' "$ipv4" | awk -F. 'NF==4{for(i=1;i<=4;i++)if($i!~/^[0-9]+$/||$i>255)exit 1;exit 0} {exit 1}' && return 0
     done
     ipv4="IPv4_Error"
 }
 
 getIpv6(){
-    ip6=$(curl -fsSL6 --connect-timeout 2 --max-time 5 https://ifconfig.co 2>/dev/null)
-    [ -z "$ip6" ] && ip6="IPv6_Error"
+    ip6=$(curl -fsSL6 --connect-timeout 2 --max-time 5 https://ifconfig.co 2>/dev/null | sed -n '1{s/[[:space:]]//g;p;q;}')
+    printf '%s\n' "$ip6" | awk '
+        length($0)<2 || length($0)>39 || $0 ~ /[^0-9A-Fa-f:]/ || $0 ~ /:::/ { exit 1 }
+        {
+            compressed=index($0,"::")>0; t=$0; if (gsub(/::/,"",t)>1) exit 1
+            if (!compressed && (substr($0,1,1)==":" || substr($0,length($0),1)==":")) exit 1
+            n=split($0,a,":"); groups=0
+            for(i=1;i<=n;i++) if(a[i]!=""){if(length(a[i])>4)exit 1;groups++}
+            if ((compressed && groups>=8) || (!compressed && groups!=8)) exit 1
+        }
+    ' || ip6="IPv6_Error"
 }
 
 printSurgeLine(){

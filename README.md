@@ -16,7 +16,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/fexumo/Snell/main/snell.sh)
 
 - 需在 bash 中执行：Debian 自带；Alpine 默认无 bash，需先 `apk add bash`
 - 需要 Root 权限，能访问 GitHub 与 Snell 下载源
-- 下载版本以 `ver.txt` 为准，不读取二进制自报版本；官方未提供 checksum，脚本仅校验 HTTPS、ZIP 结构与文件类型
+- 下载版本以 `ver.txt` 为准，不读取二进制自报版本；内置固定版本校验 SHA-256，动态版本校验 HTTPS、ZIP 结构、ELF 类型与架构
 - 服务使用专用 `snell-server` 系统用户运行；systemd 自动启用安全沙箱
 - 重新运行本命令即可获取脚本最新版
 
@@ -92,7 +92,7 @@ my-server = snell, 1.2.3.4, 8443, psk=your-psk, version=5, obfs=tls, obfs-host=w
 
 ```text
 /usr/local/bin/snell-server                     # 主程序
-/etc/snell/config.conf                          # 配置（属主 snell-server，权限 600）
+/etc/snell/config.conf                          # 配置（root:snell-server，权限 640）
 /etc/snell/ver.txt                              # 版本记录
 /etc/snell/.user-created                        # 专用系统用户创建标记
 /etc/systemd/system/snell-server.service        # systemd 服务
@@ -106,7 +106,7 @@ my-server = snell, 1.2.3.4, 8443, psk=your-psk, version=5, obfs=tls, obfs-host=w
 ## 注意事项
 
 - **安全**：`config.conf` 含明文 PSK，请限制访问权限，勿公开分享
-- **切换版本**：先确认配置与服务状态；脚本不保留旧二进制，启动失败时需根据日志手动处理
+- **更新与切换**：新程序先下载并校验；替换或启动失败时自动恢复旧程序、配置及运行状态
 
 ---
 
