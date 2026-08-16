@@ -597,7 +597,7 @@ resetConfigState(){
 }
 
 writeConfig(){
-    if [ ${#psk} -ne 16 ]; then fail "密钥必须恰好为 16 位"; return 1; fi
+    if [ ${#psk} -lt 16 ] || [ ${#psk} -gt 255 ]; then fail "密钥必须为 16-255 位"; return 1; fi
     case "$psk" in *[!A-Za-z0-9._~-]*) fail "密钥包含不安全字符"; return 1 ;; esac
     mkdir -p "$snell_dir" || fail "无法创建 Snell 配置目录" || return 1
     local tmp_conf custom_configs other_sections
@@ -686,7 +686,7 @@ readConfig(){
     case "$ver" in 5|6) ;; *) fail "Snell 配置中的 version 无效，仅支持 5 或 6"; return 1 ;; esac
     if ! printf '%s' "$port" | grep -qE '^[0-9]+$' || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then fail "Snell 配置中的监听端口无效"; return 1; fi
     case "$psk" in *[!A-Za-z0-9._~-]*) fail "Snell 配置中的密钥包含不安全字符"; return 1 ;; esac
-    [ ${#psk} -eq 16 ] || { fail "Snell 配置中的密钥必须恰好为 16 位"; return 1; }
+    if [ ${#psk} -lt 16 ] || [ ${#psk} -gt 255 ]; then fail "Snell 配置中的密钥必须为 16-255 位"; return 1; fi
     case "$tfo" in true|false) ;; *) fail "Snell 配置中的 tfo 无效"; return 1 ;; esac
     if [ "$ver" = "6" ]; then
         [ -n "$dns_ip_pref" ] || dns_ip_pref="default"
@@ -700,10 +700,10 @@ readConfig(){
 }
 
 checkPskForV6(){
-    if [ ${#psk} -eq 16 ]; then
+    if [ ${#psk} -ge 16 ] && [ ${#psk} -le 255 ]; then
         case "$psk" in *[!A-Za-z0-9._~-]*) ;; *) return 0 ;; esac
     fi
-    echo -e "${Error} 当前密钥长度为 ${#psk}，脚本要求恰好 16 位"
+    echo -e "${Error} 当前密钥长度为 ${#psk}，脚本要求至少 16 位（最多 255 位）"
     echo " 1) 自动生成随机密钥"
     echo " 2) 手动输入新密钥"
     while true; do
@@ -712,11 +712,11 @@ checkPskForV6(){
             1) psk=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 16); ok "已自动生成新密钥: ${Green_font_prefix}${psk}${Font_color_suffix}"; return 0 ;;
             2)
                 while true; do
-                    readInput "请输入新的密钥 [恰好 16 位]: "
-                    if [ ${#REPLY} -eq 16 ]; then
+                    readInput "请输入新的密钥 [16-255 位]: "
+                    if [ ${#REPLY} -ge 16 ] && [ ${#REPLY} -le 255 ]; then
                         case "$REPLY" in *[!A-Za-z0-9._~-]*) ;; *) psk=$REPLY; return 0 ;; esac
                     fi
-                    echo -e "${Error} 密钥必须恰好为 16 位安全字符！"
+                    echo -e "${Error} 密钥需为 16-255 位安全字符！"
                 done
                 ;;
             *) echo -e "${Error} 输入无效，仅支持 1 或 2" ;;
@@ -781,14 +781,15 @@ setIpv6(){
 }
 
 setPSK(){
-    echo "密钥设置（必须恰好 16 位；回车生成随机密钥，已有合规密钥则保留）"
+    local min=16
+    echo "密钥设置（至少 16 位，回车生成 16 位随机密钥；已有合规密钥回车保留）"
     while true; do
         if [ -n "$psk" ]; then readInput "请输入密钥（已有密钥，回车保留）："; else readInput "请输入密钥（回车随机生成）："; fi
         [ -n "$REPLY" ] || { [ ${#psk} -eq 16 ] && REPLY=$psk || REPLY=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 16); }
-        if [ ${#REPLY} -eq 16 ]; then
+        if [ ${#REPLY} -ge "$min" ] && [ ${#REPLY} -le 255 ]; then
             case "$REPLY" in *[!A-Za-z0-9._~-]*) ;; *) psk=$REPLY; break ;; esac
         fi
-        echo -e "${Error} 密钥必须恰好为 16 位，且仅允许字母、数字及 . _ ~ -"
+        echo -e "${Error} 密钥需为至少 16 位、最多 255 位，且仅允许字母、数字及 . _ ~ -"
     done
     showSettingResult "密钥已设置"
 }
