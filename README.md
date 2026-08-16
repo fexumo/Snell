@@ -2,7 +2,7 @@
 
 面向 Debian 与 Alpine 的单文件 Snell Server 管理脚本，支持 Snell v5 / v6、systemd / OpenRC，以及安装、配置、更新、切换和卸载。
 
-[Snell 官网](https://nssurge.com) · [发布说明](https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell)
+[Surge 官方下载源](https://nssurge.com) · [Snell 发布说明](https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell)
 
 ## 快速开始
 
@@ -14,7 +14,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/fexumo/Snell/main/snell.sh)
 
 - Root 权限
 - Debian 或 Alpine Linux
-- 可访问 GitHub 与 Snell 官方下载源
+- 可访问 GitHub 与 Surge 官方下载源
 - Alpine 需先安装 Bash：`apk add bash`
 
 脚本会自动安装运行所需依赖，但不会修改系统防火墙。安装完成后，请手动放行监听端口；默认端口为 `8443`。
@@ -22,7 +22,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/fexumo/Snell/main/snell.sh)
 ## 功能
 
 ```text
-server: v6 · running
+server: installed v6 · running
 
  1) 安装服务    2) 启动服务
  3) 停止服务    4) 重启服务
@@ -31,7 +31,7 @@ server: v6 · running
  9) 卸载服务    0) 退出脚本
 ```
 
-- 安装、更新和协议切换时，从 Snell 官方发布页自动获取对应主版本的最新可下载版本
+- 安装、更新和协议切换时，从 Surge 官方发布页自动获取对应主版本的最新可下载版本
 - 启动、停止和重启服务
 - 修改端口、密钥、TFO 等配置
 - 在 v5 与 v6 之间切换
@@ -83,13 +83,13 @@ my-server = snell, 1.2.3.4, 8443, psk=your-psk, version=5, obfs=tls, obfs-host=w
 - 服务使用专用 `snell-server` 系统用户运行
 - 配置文件为 `root:snell-server`、权限 `640`，服务进程只读
 - systemd 环境启用 `NoNewPrivileges`、`ProtectSystem` 等沙箱限制
-- 固定版本不写入脚本；安装、更新、切换前均从官网检测最新版本
+- 固定版本不写入脚本；安装、更新、切换前均从 Surge 官方发布页检测最新版本
 - 动态版本校验 HTTPS、ZIP 单文件结构、解压大小、ELF 类型与目标架构
 - 更新和协议切换先下载并验证，再停止服务
 - 替换、配置写入、新版本启动或操作中断失败时，自动恢复旧程序、配置、版本记录及原运行状态
 - 卸载后检查服务文件、配置和残留进程
 
-> 官网发布页或下载源不可访问时，安装、更新和协议切换会中止，不会回退到脚本内置版本。
+> Surge 官方发布页或下载源不可访问时，安装、更新和协议切换会中止，不会回退到脚本内置版本。
 
 ## 支持范围
 
@@ -119,7 +119,7 @@ Snell v6 官方当前未提供 Linux `armv7l` 构建，脚本会拒绝在该架�
 
 - `config.conf` 包含明文 PSK，请勿公开或上传
 - 脚本不会开放或关闭防火墙端口
-- 下载版本以官网发布页为准，不读取二进制自报版本
+- 下载版本以 Surge 官方发布页为准，不读取二进制自报版本
 - 仅删除带有创建标记的专用系统用户，不会删除同名的既有用户
 
 ## 免责声明

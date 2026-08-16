@@ -507,7 +507,7 @@ confVersion(){
 }
 
 resolveLatestVersion(){
-    latest_version=$(getLatestVersionFromWeb "v$1") || { fail "无法从 Snell 官网获取 v$1 最新版本"; return 1; }
+    latest_version=$(getLatestVersionFromWeb "v$1") || { fail "无法从 Surge 官方发布页获取 v$1 最新版本"; return 1; }
 }
 
 
@@ -918,7 +918,7 @@ runWorkflow(){
             target="$latest_version"
             setPort; setPSK
             if [ "$2" = "6" ]; then setTFO; setDNSIPPref; setMode; else setObfs; setIpv6; setTFO; fi
-            downloadSnell "$target" "Snell v${2} 官网最新版本" || { cleanupFailedInstall; return 1; }
+            downloadSnell "$target" "Snell v${2} Surge 官方最新版本" || { cleanupFailedInstall; return 1; }
             if ! setupServiceUser || ! setupService || ! writeConfig; then
                 cleanupFailedInstall
                 fail "Snell Server 安装配置失败"
@@ -932,13 +932,13 @@ runWorkflow(){
             collectVersionSettings
             resolveLatestVersion "$target" || { ver=$current; return 1; }
             target="$latest_version"
-            applyBinaryChange "$target" "Snell v${target%%.*} 官网最新版本" "Snell Server 重启完毕！" "版本切换完成，服务保持停止状态" || {
+            applyBinaryChange "$target" "Snell v${target%%.*} Surge 官方最新版本" "Snell Server 重启完毕！" "版本切换完成，服务保持停止状态" || {
                 ver=$current
                 return 1
             }
             ;;
     update)
-            applyBinaryChange "$target" "Snell v6 官网最新版本" "Snell Server 更新完成" "更新完成，服务保持停止状态"
+            applyBinaryChange "$target" "Snell v6 Surge 官方最新版本" "Snell Server 更新完成" "更新完成，服务保持停止状态"
             ;;
     esac
 }
@@ -949,9 +949,9 @@ simpleHeader(){
     echo
     if [ -e "$snell_bin" ] && [ -e "$snell_conf" ]; then
         checkStatus
-        header_ver=$(sed 's/^v//' "$snell_version_file" 2>/dev/null)
-        [ -z "$header_ver" ] && header_ver=$(confVersion)
-        printf 'server: v%s · %s\n' "$header_ver" "$status"
+        version=$(sed 's/^v//' "$snell_version_file" 2>/dev/null)
+        [ -z "$version" ] && version=$(confVersion)
+        printf 'server: installed v%s · %s\n' "$version" "$status"
     else
         echo 'server: not installed'
     fi
@@ -1000,8 +1000,8 @@ installSnell(){
     simpleHeader
     echo
     echo "安装版本"
-    echo " 1) v5（从官网获取最新版本）"
-    echo " 2) v6（从官网获取最新版本）"
+    echo " 1) v5（从 Surge 官方获取最新版本）"
+    echo " 2) v6（从 Surge 官方获取最新版本）"
     readInput "选择 [1/2]（默认 1.v5）："
     case "${REPLY:-1}" in
         1) ver=5 ;;
