@@ -7,7 +7,7 @@
 ## 快速开始
 
 ```sh
-bash <(curl -fsSL https://raw.githubusercontent.com/fexumo/Snell/main/snell.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/fexumo/snell/main/snell.sh)
 ```
 
 运行条件：
