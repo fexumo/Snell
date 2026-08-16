@@ -22,7 +22,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/fexumo/Snell/main/snell.sh)
 ## 功能
 
 ```text
-server: installed v6 · running
+server: installed v6 · latest v6.0.0rc2 · running
 
  1) 安装服务    2) 启动服务
  3) 停止服务    4) 重启服务
@@ -31,8 +31,9 @@ server: installed v6 · running
  9) 卸载服务    0) 退出脚本
 ```
 
+面板中的 `installed` 是本机已安装版本；`latest` 来自 Surge 官方发布页，并会验证当前架构的官方下载地址。若官网版本更新，会显示 `update available`。官网暂时不可访问时，面板只显示本地版本，不影响菜单使用。
+
 - 安装、更新和协议切换时，从 Surge 官方发布页自动获取对应主版本的最新可下载版本
-- 启动、停止和重启服务
 - 修改端口、密钥、TFO 等配置
 - 在 v5 与 v6 之间切换
 - 将 v5 升级至 v6，或更新 v6

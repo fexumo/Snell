@@ -951,7 +951,21 @@ simpleHeader(){
         checkStatus
         version=$(sed 's/^v//' "$snell_version_file" 2>/dev/null)
         [ -z "$version" ] && version=$(confVersion)
-        printf 'server: installed v%s · %s\n' "$version" "$status"
+        major=${version%%.*}
+        if [ "$panel_latest_major" != "$major" ]; then
+            panel_latest=$(getLatestVersionFromWeb "v${major}" 2>/dev/null)
+            panel_latest_major="$major"
+        fi
+        if [ -n "$panel_latest" ]; then
+            compareVersions "$version" "$panel_latest"
+            if [ $? -eq 2 ]; then
+                printf 'server: installed v%s · update available: v%s · %s\n' "$version" "$panel_latest" "$status"
+            else
+                printf 'server: installed v%s · latest v%s · %s\n' "$version" "$panel_latest" "$status"
+            fi
+        else
+            printf 'server: installed v%s · %s\n' "$version" "$status"
+        fi
     else
         echo 'server: not installed'
     fi
