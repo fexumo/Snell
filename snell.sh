@@ -10,8 +10,7 @@ export PATH
 #	WebSite: https://fexumo.org
 #==============================================
 
-snell_v5_version="5.0.1"
-snell_v6_version="6.0.0rc2"
+# Version is resolved from the official release page at runtime.
 snell_dir="/etc/snell/"
 snell_bin="/usr/local/bin/snell-server"
 snell_conf="/etc/snell/config.conf"
@@ -471,32 +470,24 @@ getSnellDownloadUrl(){
     snell_url="https://dl.nssurge.com/snell/snell-server-v${1}-linux-${arch}.zip"
 }
 
-validateVersionUrl(){
-    getSnellDownloadUrl "$1" || return 1
-    curl -fsSIL --proto '=https' --tlsv1.2 --max-time 10 "$snell_url" 2>/dev/null | grep -q '^HTTP/.* 200'
-}
-
 getLatestVersionFromWeb(){
     local version_type="$1" pattern latest
-    if [ -z "$_snell_release_page" ]; then
-        _snell_release_page=$(curl -fsSL --proto '=https' --tlsv1.2 --max-time 10 \
-            "https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell" 2>/dev/null)
-    fi
+    [ -n "$_snell_release_page" ] || _snell_release_page=$(curl -fsSL --proto '=https' --tlsv1.2 --max-time 10 \
+        "https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell" 2>/dev/null)
     [ -n "$_snell_release_page" ] || return 1
+    latest=""
     case "$version_type" in
         v5) pattern='snell-server-v5\.[0-9]+\.[0-9]+[a-z]*[0-9]*-linux' ;;
         v6) pattern='snell-server-v6\.[0-9]+\.[0-9]+[a-z]*[0-9]*-linux' ;;
         *) return 1 ;;
     esac
-    latest=""
     for v in $(printf '%s' "$_snell_release_page" | grep -oE "$pattern" | sed 's/snell-server-v//;s/-linux//' | sort -u); do
-        if [ -z "$latest" ]; then
-            latest="$v"
-        elif compareVersions "$v" "$latest"; then
-            latest="$v"
-        fi
+        if [ -z "$latest" ]; then latest="$v"; elif compareVersions "$v" "$latest"; then latest="$v"; fi
     done
-    [ -n "$latest" ] && echo "$latest"
+    [ -n "$latest" ] || return 1
+    getSnellDownloadUrl "$latest" || return 1
+    curl -fsSIL --proto '=https' --tlsv1.2 --max-time 10 "$snell_url" 2>/dev/null | grep -q '^HTTP/.* 200' || return 1
+    echo "$latest"
 }
 
 readInstalledVersion(){
@@ -515,45 +506,18 @@ confVersion(){
     ' "$snell_conf" 2>/dev/null
 }
 
-pickVersion(){
-    local major="$1" builtin_ver web_ver
-    case "$major" in
-        5) builtin_ver=$snell_v5_version ;;
-        6) builtin_ver=$snell_v6_version ;;
-        *) return 1 ;;
-    esac
-    web_ver=$(getLatestVersionFromWeb "v${major}")
-    if [ -n "$web_ver" ]; then
-        compareVersions "$builtin_ver" "$web_ver"
-        if [ $? -eq 2 ] && validateVersionUrl "$web_ver"; then
-            echo "$web_ver"
-            return 0
-        fi
-    fi
-    echo "$builtin_ver"
+resolveLatestVersion(){
+    latest_version=$(getLatestVersionFromWeb "v$1") || { fail "无法从 Snell 官网获取 v$1 最新版本"; return 1; }
 }
+
 
 installFromZip(){
     local version="$1" label="$2" url="$3" target="${4:-$snell_bin}"
-    local tmp_dir zip_file binary entries kind expected actual size
+    local tmp_dir zip_file binary entries kind size
     tmp_dir=$(mktemp -d /tmp/snell-install.XXXXXX) || fail "无法创建临时目录" || return 1
     zip_file="${tmp_dir}/snell-server.zip"
     if ! curl -fsSL --proto '=https' --tlsv1.2 --retry 2 --retry-delay 1 --max-time 60 --max-filesize 52428800 -o "$zip_file" "$url" >/dev/null 2>&1; then
         rm -rf "$tmp_dir"; fail "Snell Server ${Yellow_font_prefix}${label}${Font_color_suffix} 下载失败！"; return 1
-    fi
-    case "$version:$arch" in
-        5.0.1:i386) expected=6a3e30928315427d6f747f26408d0f74eb88f460344d0e1fcb3f7c32c708a09d ;;
-        5.0.1:armv7l) expected=14489f3e857569c8835dd3598b7ea6bca5371d4290ac7cf0f6c8dfb3381c1fb2 ;;
-        5.0.1:aarch64) expected=2f178bf5ac468ce1a130454efa40a0603fbbe4e47ecc4880a989f4abc7f824cf ;;
-        5.0.1:amd64) expected=9bea1c2b9e35b73b31634856c04d18c393072b9e5dcde6a32781d8b8f908c539 ;;
-        6.0.0rc2:i386) expected=67060ef79ac4ef0bb64c520302396620b3a06f8f6d5ceb450be283e4fa749335 ;;
-        6.0.0rc2:aarch64) expected=a0b2915cbc77dc3baf8fa069e741c20808d8a10c3a8a93e709a0a580645c3bd7 ;;
-        6.0.0rc2:amd64) expected=8a9c4463ca87cfa5eaa37c6af0d37ab93ea275aa12391985bb2a375ca3abd7f2 ;;
-        *) expected="" ;;
-    esac
-    if [ -n "$expected" ]; then
-        actual=$(sha256sum "$zip_file" | awk '{print $1}')
-        [ "$actual" = "$expected" ] || { rm -rf "$tmp_dir"; fail "下载包 SHA-256 校验失败"; return 1; }
     fi
     entries=$(unzip -Z1 "$zip_file" 2>/dev/null)
     size=$(unzip -l "$zip_file" 2>/dev/null | awk '$4=="snell-server"{print $1;exit}')
@@ -950,17 +914,11 @@ runWorkflow(){
     case "$action" in
         install)
             installDependencies || return 1
+            resolveLatestVersion "$2" || { cleanupFailedInstall; return 1; }
+            target="$latest_version"
             setPort; setPSK
-            if [ "$target" = "6" ]; then
-                setTFO; setDNSIPPref; setMode
-            else
-                setObfs; setIpv6; setTFO
-            fi
-            if [ "$target" = "6" ]; then
-                downloadSnell "$snell_v6_version" "Snell v6 官网源版" || { cleanupFailedInstall; return 1; }
-            else
-                downloadSnell "$snell_v5_version" "Snell v5 官网源版" || { cleanupFailedInstall; return 1; }
-            fi
+            if [ "$2" = "6" ]; then setTFO; setDNSIPPref; setMode; else setObfs; setIpv6; setTFO; fi
+            downloadSnell "$target" "Snell v${2} 官网最新版本" || { cleanupFailedInstall; return 1; }
             if ! setupServiceUser || ! setupService || ! writeConfig; then
                 cleanupFailedInstall
                 fail "Snell Server 安装配置失败"
@@ -972,13 +930,15 @@ runWorkflow(){
         switch)
             current="$3"
             collectVersionSettings
-            applyBinaryChange "$(pickVersion "$target")" "Snell v${target} 版本" "Snell Server 重启完毕！" "版本切换完成，服务保持停止状态" || {
+            resolveLatestVersion "$target" || { ver=$current; return 1; }
+            target="$latest_version"
+            applyBinaryChange "$target" "Snell v${target%%.*} 官网最新版本" "Snell Server 重启完毕！" "版本切换完成，服务保持停止状态" || {
                 ver=$current
                 return 1
             }
             ;;
-        update)
-            applyBinaryChange "$target" "Snell v6 最新版本" "Snell Server 更新完成" "更新完成，服务保持停止状态"
+    update)
+            applyBinaryChange "$target" "Snell v6 官网最新版本" "Snell Server 更新完成" "更新完成，服务保持停止状态"
             ;;
     esac
 }
@@ -1040,8 +1000,8 @@ installSnell(){
     simpleHeader
     echo
     echo "安装版本"
-    echo " 1) v5（${snell_v5_version}，稳定版）"
-    echo " 2) v6（${snell_v6_version}，内置版）"
+    echo " 1) v5（从官网获取最新版本）"
+    echo " 2) v6（从官网获取最新版本）"
     readInput "选择 [1/2]（默认 1.v5）："
     case "${REPLY:-1}" in
         1) ver=5 ;;
@@ -1166,19 +1126,10 @@ updateSnell(){
         return
     fi
 
-    local installed latest candidate script_ver web_ver
+    local installed latest
     installed=$(readInstalledVersion 2>/dev/null) || { echo -e "${Tip} 无法识别当前 Snell 版本，已跳过更新检查"; sleep 1; return 0; }
-    latest="$installed"
-    script_ver=$snell_v6_version
-    web_ver=$(getLatestVersionFromWeb "v6")
-    for candidate in "$script_ver" "$web_ver"; do
-        [ -n "$candidate" ] || continue
-        compareVersions "$latest" "$candidate"
-        [ $? -eq 2 ] && validateVersionUrl "$candidate" && latest="$candidate"
-    done
-    if ! compareVersions "$installed" "$latest"; then
-        :
-    fi
+    resolveLatestVersion 6 || return 1
+    latest="$latest_version"
     compareVersions "$installed" "$latest"
     if [ $? -ne 2 ]; then
         ok "当前已是最新版本：v${installed}"
