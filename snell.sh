@@ -390,13 +390,18 @@ EOF
 }
 
 cleanupFailedInstall(){
-    case "$(serviceBackend)" in
-        systemd) systemctl disable snell-server >/dev/null 2>&1 ;;
-        openrc) rc-update del snell-server default >/dev/null 2>&1 ;;
-    esac
+    if [ -f /etc/systemd/system/snell-server.service ]; then
+        systemctl stop snell-server >/dev/null 2>&1 || true
+        systemctl disable snell-server >/dev/null 2>&1 || true
+    elif [ -f /etc/init.d/snell-server ]; then
+        rc-service snell-server stop >/dev/null 2>&1 || true
+        rc-update del snell-server default >/dev/null 2>&1 || true
+    fi
+    stopOrphanedProcesses >/dev/null 2>&1 || true
     removeServiceUser || true
     rm -f "$snell_bin" /etc/systemd/system/snell-server.service /etc/systemd/system/multi-user.target.wants/snell-server.service /etc/init.d/snell-server
     rm -rf "$snell_dir"
+    rm -f /run/snell-server.pid /var/log/snell-server.log
     command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload >/dev/null 2>&1
 }
 
@@ -462,7 +467,7 @@ compareVersions(){
 }
 
 getSnellDownloadUrl(){
-    sysArch || return 1
+    [ -n "$arch" ] || sysArch || return 1
     if [ "$arch" = "armv7l" ] && [ "${1%%.*}" = "6" ]; then
         fail "Snell v6 官方未提供 Linux armv7l 构建"
         return 1
@@ -471,23 +476,32 @@ getSnellDownloadUrl(){
 }
 
 getLatestVersionFromWeb(){
-    local version_type="$1" pattern latest
+    local version_type="$1" pattern latest candidates v
     [ -n "$_snell_release_page" ] || _snell_release_page=$(curl -fsSL --proto '=https' --tlsv1.2 --max-time 10 \
         "https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell" 2>/dev/null)
     [ -n "$_snell_release_page" ] || return 1
-    latest=""
     case "$version_type" in
         v5) pattern='snell-server-v5\.[0-9]+\.[0-9]+[a-z]*[0-9]*-linux' ;;
         v6) pattern='snell-server-v6\.[0-9]+\.[0-9]+[a-z]*[0-9]*-linux' ;;
         *) return 1 ;;
     esac
-    for v in $(printf '%s' "$_snell_release_page" | grep -oE "$pattern" | sed 's/snell-server-v//;s/-linux//' | sort -u); do
-        if [ -z "$latest" ]; then latest="$v"; elif compareVersions "$v" "$latest"; then latest="$v"; fi
+    candidates=$(printf '%s' "$_snell_release_page" | grep -oE "$pattern" | sed 's/snell-server-v//;s/-linux//' | sort -u)
+    while [ -n "$candidates" ]; do
+        latest=""
+        for v in $candidates; do
+            if [ -z "$latest" ]; then latest="$v"; elif compareVersions "$v" "$latest"; then latest="$v"; fi
+        done
+        [ -n "$latest" ] || return 1
+        if ! { [ "$arch" = "armv7l" ] && [ "$version_type" = "v6" ]; }; then
+            getSnellDownloadUrl "$latest" >/dev/null 2>&1 || return 1
+            if curl -fsSIL --proto '=https' --tlsv1.2 --max-time 10 "$snell_url" 2>/dev/null | grep -q '^HTTP/.* 200'; then
+                echo "$latest"
+                return 0
+            fi
+        fi
+        candidates=$(printf '%s\n' "$candidates" | grep -vx "$latest")
     done
-    [ -n "$latest" ] || return 1
-    getSnellDownloadUrl "$latest" || return 1
-    curl -fsSIL --proto '=https' --tlsv1.2 --max-time 10 "$snell_url" 2>/dev/null | grep -q '^HTTP/.* 200' || return 1
-    echo "$latest"
+    return 1
 }
 
 readInstalledVersion(){
@@ -880,8 +894,12 @@ rollbackBinaryChange(){
     chmod 640 "$snell_conf" 2>/dev/null || failed=true
     chown "root:${snell_user}" "$snell_conf" 2>/dev/null || failed=true
     if [ "$service_was_running" = true ] && { ! svc start || ! waitServiceStart; }; then showServiceLog; failed=true; fi
-    rm -rf "$transaction"
-    [ "$failed" = false ] && ok "已恢复旧版本及原运行状态"
+    if [ "$failed" = false ]; then
+        rm -rf "$transaction"
+        ok "已恢复旧版本及原运行状态"
+    else
+        echo -e "${Error} 自动回滚不完整，备份保留在：${transaction}"
+    fi
     [ "$failed" = false ]
 }
 
@@ -889,13 +907,14 @@ applyBinaryChange(){
     local version="$1" label="$2" ok_msg="$3" stop_msg="$4"
     installDependencies || return 1
     transaction=$(mktemp -d "$(dirname "$snell_bin")/.snell-transaction.XXXXXX") || fail "无法创建事务目录" || return 1
+    trap 'rm -rf "$transaction"; exit 130' HUP INT TERM
     if ! downloadSnell "$version" "$label" "$transaction/new" ||
        ! cp -p "$snell_bin" "$transaction/server" || ! cp -p "$snell_conf" "$transaction/config"; then
-        rm -rf "$transaction"; fail "准备更新失败，当前版本未受影响"; return 1
+        trap - HUP INT TERM; rm -rf "$transaction"; fail "准备更新失败，当前版本未受影响"; return 1
     fi
-    if [ -f "$snell_version_file" ] && ! cp -p "$snell_version_file" "$transaction/version"; then rm -rf "$transaction"; return 1; fi
+    if [ -f "$snell_version_file" ] && ! cp -p "$snell_version_file" "$transaction/version"; then trap - HUP INT TERM; rm -rf "$transaction"; return 1; fi
     service_was_running=false
-    checkStatus || { rm -rf "$transaction"; fail "无法确认服务状态，已取消更新"; return 1; }
+    checkStatus || { trap - HUP INT TERM; rm -rf "$transaction"; fail "无法确认服务状态，已取消更新"; return 1; }
     [ "$status" = "running" ] && service_was_running=true
     trap 'echo; echo -e "${Error} 操作中断，正在回滚"; rollbackBinaryChange; exit 130' HUP INT TERM
     if { [ "$service_was_running" = true ] && ! svc stop; } ||
@@ -914,7 +933,7 @@ runWorkflow(){
     case "$action" in
         install)
             installDependencies || return 1
-            resolveLatestVersion "$2" || { cleanupFailedInstall; return 1; }
+            resolveLatestVersion "$2" || return 1
             target="$latest_version"
             setPort; setPSK
             if [ "$2" = "6" ]; then setTFO; setDNSIPPref; setMode; else setObfs; setIpv6; setTFO; fi
@@ -924,7 +943,7 @@ runWorkflow(){
                 fail "Snell Server 安装配置失败"
                 return 1
             fi
-            startSnell || return 1
+            startSnell || { cleanupFailedInstall; return 1; }
             viewConfig
             ;;
         switch)
@@ -949,10 +968,14 @@ simpleHeader(){
     echo
     if [ -e "$snell_bin" ] && [ -e "$snell_conf" ]; then
         checkStatus
-        version=$(sed 's/^v//' "$snell_version_file" 2>/dev/null)
-        [ -z "$version" ] && version=$(confVersion)
+        version=$(readInstalledVersion 2>/dev/null) || {
+            version=$(confVersion)
+            case "$version" in 5|6) ;; *) version="?" ;; esac
+        }
         major=${version%%.*}
-        if [ "$panel_latest_major" != "$major" ]; then
+        if [ "$major" = "?" ]; then
+            panel_latest=""; panel_latest_major="?"
+        elif [ "$panel_latest_major" != "$major" ]; then
             panel_latest=$(getLatestVersionFromWeb "v${major}" 2>/dev/null)
             panel_latest_major="$major"
         fi
