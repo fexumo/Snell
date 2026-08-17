@@ -1,8 +1,8 @@
 # Snell Server 管理脚本
 
-面向 Debian 与 Alpine 的单文件 Snell Server 管理脚本，支持 Snell v5 / v6、systemd / OpenRC，以及安装、配置、更新、协议切换和卸载。
+Debian / Alpine 单文件 Snell Server 管理脚本，支持 Snell v5/v6、systemd/OpenRC，以及安装、配置、更新、切换和卸载。
 
-[Surge 官网](https://nssurge.com) · [Snell 官方发布说明](https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell) · [Snell 下载目录](https://dl.nssurge.com/snell/)
+[Surge 官网](https://nssurge.com) · [Snell 发布说明](https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell) · [下载源](https://dl.nssurge.com/snell/)
 
 ## 快速开始
 
@@ -10,21 +10,17 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/fexumo/snell/main/snell.sh)
 ```
 
-运行条件：
+需要 Root、Debian/Alpine、可用的 systemd/OpenRC 和网络连接。Alpine 先安装 Bash：
 
-- Root 权限
-- Debian 或 Alpine Linux
-- 正常工作的 systemd 或 OpenRC
-- 可访问 GitHub 与 Surge 官方发布页、下载源
-- Alpine 需先安装 Bash：`apk add bash`
+```sh
+apk add bash
+```
 
-脚本会按系统自动安装运行依赖，但不会修改系统防火墙。安装后请手动放行监听端口；默认端口为 `8443`。
+脚本自动安装依赖，但不修改防火墙；默认监听端口为 `8443`，请自行放行。
 
-## 功能
+## 菜单
 
 ```text
-server: installed v6.0.0 · latest v6.0.1 · running
-
  1) 安装服务    2) 启动服务
  3) 停止服务    4) 重启服务
  5) 设置配置    6) 查看配置
@@ -32,68 +28,29 @@ server: installed v6.0.0 · latest v6.0.1 · running
  9) 卸载服务    0) 退出脚本
 ```
 
-上面的版本号仅为显示示例：
+支持安装/更新官方最新可下载版本、v5/v6 切换、配置管理、状态查看和 Surge 配置生成。
 
-- `installed`：本机已安装版本，来自 `/etc/snell/ver.txt`
-- `latest`：Surge 官方发布页中当前架构可下载的最新版本
-- `update available`：官方版本高于本机版本
-- 官方页面暂时不可访问时，面板只显示本地状态，不影响已有服务操作
-
-支持：
-
-- 安装 v5 / v6 的最新可下载版本
-- 启动、停止和重启服务
-- 修改端口、密钥、TFO 等配置
-- 在 v5 与 v6 之间切换
-- 将 v5 升级到 v6，或更新现有 v6
-- 查看运行状态并生成 Surge 配置
-- 卸载服务及脚本创建的系统用户
-
-## 内部架构
-
-仓库保持极简，只包含 `README.md` 与 `snell.sh`。脚本内部按职责分层：
-
-| 层 | 职责 |
-|---|---|
-| 平台与运行时 | 识别系统、架构、服务后端和安装状态 |
-| 服务适配 | 统一封装 systemd / OpenRC 的安装、状态、启用和控制 |
-| 版本与制品 | 查询 Surge 发布页，选择当前架构可下载版本并验证二进制 |
-| 配置模型 | 统一解析、校验和生成配置，保留未托管键及其他 INI 节 |
-| 事务引擎 | 统一处理安装、更新、协议切换、配置修改和服务协调 |
-| 动作与界面 | 菜单只负责收集输入并调用动作 |
-
-运行态、配置态和事务态分别使用 `rt_*`、`cfg_*`、`tx_*` 状态域，避免菜单输入覆盖服务状态。服务文件由配置派生；再次运行脚本时会协调权限和服务定义，但发现现有配置无效时不会擅自修改。
+面板中的 `installed` 是本机版本；`latest` 是 Surge 发布页中当前架构可下载的版本；有更新时显示 `update available`。官网不可访问时只显示本地状态。
 
 ## 配置
 
 | 配置项 | v5 | v6 |
 |---|:---:|:---:|
-| 监听端口 | ✓ | ✓ |
-| 密钥 | ✓ | ✓ |
-| TCP Fast Open | ✓ | ✓ |
+| 监听端口、密钥、TFO | ✓ | ✓ |
 | OBFS / OBFS 域名 | ✓ | — |
 | 目标域名 IPv6 解析 | ✓ | — |
-| 目标地址 DNS IP 偏好 | — | ✓ |
-| 混淆模式 | — | ✓ |
+| 目标地址 DNS IP 偏好、混淆模式 | — | ✓ |
 | 出口网卡 | ✓ | ✓ |
 
-密钥规则：
+密钥为 **16–255 位**，允许字母、数字、`.`、`_`、`~`、`-`；回车默认生成 16 位随机密钥。旧配置密钥不符合范围时，需先手动修复。
 
-- Snell v5 技术上接受任意非空密钥
-- Snell v6 官方要求 12–255 字节
-- 本脚本统一要求 v5 / v6 密钥至少 16 位、最多 255 位
-- 允许字符：字母、数字、`.`、`_`、`~`、`-`
-- 回车生成 16 位随机密钥；手动输入可使用更长密钥
+`目标域名 IPv6 解析` 和 `目标地址 DNS IP 偏好`控制服务端访问目标时的 IPv4/IPv6 选择，不控制客户端连接服务器的方式；服务器监听由 `listen` 决定。
 
-已有配置的密钥少于 16 位或超过 255 位时，脚本会拒绝继续管理，需先手动修复。
-
-`目标域名 IPv6 解析` 与 `目标地址 DNS IP 偏好` 控制服务端解析和连接目标网站时使用 IPv4 还是 IPv6，不控制客户端如何连接 Snell 服务端。服务端监听地址由 `listen` 决定。
-
-修改配置时会保留 `[snell-server]` 中脚本未管理的键，以及其他 INI 配置节。配置文件和服务定义通过同一事务提交；新配置启动失败时会恢复旧配置和原运行状态。
+脚本会保留 `[snell-server]` 中未托管的键和其他 INI 节。
 
 ## Surge 配置
 
-菜单 `6` 会获取服务器公网地址并生成可复制的配置：
+菜单 `6` 获取公网地址并生成配置：
 
 ```ini
 # v6
@@ -103,70 +60,45 @@ my-server = snell, 1.2.3.4, 8443, psk=your-psk, version=6, mode=default, reuse=t
 my-server = snell, 1.2.3.4, 8443, psk=your-psk, version=5, obfs=tls, obfs-host=www.wechat.com, reuse=true, tfo=true
 ```
 
-服务器名称取自主机名；地址优先使用公网 IPv4，获取失败时回退 IPv6。
+## 版本与安全
 
-## 版本检测与制品校验
+- 脚本不内置固定版本号；安装、更新、切换和面板提示均查询 Surge 发布页。
+- 自动验证当前架构下载地址、HTTPS、ZIP 单文件结构、大小、ELF 类型、架构和本机可执行性；Alpine 自动处理 v5 UPX 包。
+- 服务以专用 `snell-server` 用户运行；配置为 `root:snell-server`、权限 `640`。
+- systemd/OpenRC 服务定义由当前配置生成；设置 `egress-interface` 时才授予所需网络能力。
+- 安装、更新、切换和配置修改共用事务流程；失败或中断时恢复程序、配置、版本记录、服务定义、启用状态和原运行状态。
+- 回滚不完整时保留事务备份；安装失败会清理已创建的服务、账户和文件。
 
-- 脚本不内置固定版本号
-- 安装、更新、协议切换和面板提示均从 Surge 官方发布页读取版本
-- 会验证当前架构的下载地址；最新版本缺少当前架构包时，向下选择可下载版本
-- 下载时强制 HTTPS/TLS，限制归档体积
-- ZIP 必须只包含根目录下的 `snell-server`
-- 检查解压大小、ELF 类型、目标架构和二进制本机可执行性
-- Alpine 会自动处理官方 v5 UPX 压缩包
-
-Surge 官方未提供可供脚本固定比对的 checksum，因此动态下载仍存在无法进行摘要级供应链验证的限制。
-
-## 安全与事务回滚
-
-- 服务使用专用 `snell-server` 系统用户运行
-- 配置文件为 `root:snell-server`、权限 `640`，服务进程只读
-- systemd 使用 `NoNewPrivileges`、`ProtectSystem`、`PrivateDevices` 等限制
-- 配置 `egress-interface` 时，仅按需授予 `CAP_NET_RAW` 与 `CAP_NET_ADMIN`
-- OpenRC 使用原生 `openrc-run`、前台进程托管和 pidfile
-- 更新和协议切换先下载、验证和准备备份，再停止服务
-- 安装、更新、协议切换、配置写入、服务启动或操作中断失败时，恢复程序、配置、版本记录、服务定义、启用状态及原运行状态
-- 回滚不完整时保留事务备份目录，不伪报成功
-- 安装失败会清理已创建的服务、账户、程序和运行时文件
-- 卸载后检查服务文件、配置目录和残留进程
-
-> Surge 官方发布页或下载源不可访问时，安装、更新和协议切换会中止，不会回退到脚本内置版本。
+> Surge 未为动态下载提供固定 checksum，因此无法进行摘要级供应链验证。发布页或下载源不可用时不会回退到旧内置版本。
 
 ## 支持范围
 
 | 项目 | 支持 |
 |---|---|
 | 系统 | Debian、Alpine |
-| 服务管理 | systemd、OpenRC |
+| 服务 | systemd、OpenRC |
 | 架构 | i386、amd64、armv7l、aarch64 |
 | 协议 | Snell v5、Snell v6 |
 
-Snell v6 官方当前未提供 Linux `armv7l` 构建，脚本会拒绝在该架构安装或切换至 v6。`armv6l` 会尝试使用 v5 的 `armv7l` 构建，但不保证能够运行。
+Snell v6 官方没有 Linux `armv7l` 构建；`armv6l` 仅尝试 v5 的 armv7l 包，不保证可运行。
 
 ## 文件路径
 
 ```text
-/usr/local/bin/snell-server                     # 主程序
-/etc/snell/config.conf                          # 配置（root:snell-server，640）
-/etc/snell/ver.txt                              # 已安装版本记录
-/etc/snell/.user-created                        # 系统用户创建标记
-/etc/systemd/system/snell-server.service        # systemd 服务
-/etc/systemd/system/multi-user.target.wants/...  # systemd 启用链接
-/etc/init.d/snell-server                        # OpenRC 服务
-/run/snell-server.pid                           # OpenRC PID
-/var/log/snell-server.log                       # OpenRC 日志
+/usr/local/bin/snell-server              # 主程序
+/etc/snell/config.conf                   # 配置，root:snell-server 640
+/etc/snell/ver.txt                       # 已安装版本
+/etc/snell/.user-created                 # 用户创建标记
+/etc/systemd/system/snell-server.service # systemd 服务
+/etc/init.d/snell-server                 # OpenRC 服务
+/run/snell-server.pid                    # OpenRC PID
+/var/log/snell-server.log                # OpenRC 日志
 ```
 
-更新过程中的临时事务目录位于 `/usr/local/bin/.snell-tx.*`；仅在回滚不完整时保留。
+更新事务目录为 `/usr/local/bin/.snell-tx.*`，仅在回滚不完整时保留。
 
-## 注意事项
+## 注意
 
-- `config.conf` 包含明文 PSK，请勿公开或上传
-- 脚本不会开放或关闭防火墙端口
-- 下载版本以 Surge 官方发布页为准，不读取二进制自报版本
-- 仅删除带有创建标记的专用系统用户，不会删除同名的既有用户
-- 如果配置损坏，先手动修复 `/etc/snell/config.conf`，脚本不会自动猜测或覆盖
-
-## 免责声明
-
-本项目仅供学习与个人使用。请遵守所在地法律法规及相关服务条款。使用本脚本造成的直接或间接损失由使用者自行承担。
+- `config.conf` 含明文 PSK，请勿公开或上传。
+- 脚本不操作防火墙。
+- 仅删除带创建标记的专用用户；配置损坏时不会自动猜测或覆盖。
