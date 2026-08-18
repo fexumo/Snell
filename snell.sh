@@ -62,10 +62,6 @@ ui_progress(){
     fi
 }
 
-ui_progress_finish(){
-    if [ -t 1 ]; then printf '\r\033[K'; else :; fi
-}
-
 
 platform_init(){
     [ "$(id -u)" = 0 ] || { ui_error "需要 Root 权限，请使用 sudo -i"; exit 1; }
@@ -466,12 +462,7 @@ artifact_fetch(){
     work=$(dirname "$target"); archive="$work/package.zip"; extract="$work/unpack"
     rm -rf "$archive" "$extract"; mkdir -p "$extract" || return 1
     ui_progress 25 "下载 Snell v${version}"
-    if [ -t 2 ]; then
-        ui_progress_finish
-        curl -fL --progress-bar --proto '=https' --tlsv1.2 --retry 2 --retry-delay 1 --max-time 60 --max-filesize 52428800 \
-            -o "$archive" "$artifact_url" || return 1
-        printf '\r\033[K'
-    elif ! curl -fsSL --proto '=https' --tlsv1.2 --retry 2 --retry-delay 1 --max-time 60 --max-filesize 52428800 \
+    if ! curl -fsSL --proto '=https' --tlsv1.2 --retry 2 --retry-delay 1 --max-time 60 --max-filesize 52428800 \
         -o "$archive" "$artifact_url" >/dev/null 2>&1; then
         return 1
     fi
