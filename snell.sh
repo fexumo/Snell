@@ -26,9 +26,9 @@ cfg_listen=""; cfg_port=""; cfg_version=""; cfg_psk=""; cfg_ipv6=false; cfg_obfs
 tx_dir=""; tx_cfg=""; tx_mode=""; tx_was_running=false; tx_was_enabled=false; tx_had_service=false; tx_had_version=false; tx_account_created=false
 
 ui_clear(){ [ -z "${TERM:-}" ] || clear 2>/dev/null || true; }
-ui_ok(){ printf '%b✓%b %s\n' "$C_GREEN" "$C_RESET" "$1"; }
-ui_warn(){ printf '%b!%b %s\n' "$C_YELLOW" "$C_RESET" "$1"; }
-ui_error(){ printf '%b✗%b %s\n' "$C_RED" "$C_RESET" "$1"; return 1; }
+ui_ok(){ [ -t 1 ] && printf '\r\033[K'; printf '%b✓%b %s\n' "$C_GREEN" "$C_RESET" "$1"; }
+ui_warn(){ [ -t 1 ] && printf '\r\033[K'; printf '%b!%b %s\n' "$C_YELLOW" "$C_RESET" "$1"; }
+ui_error(){ [ -t 1 ] && printf '\r\033[K'; printf '%b✗%b %s\n' "$C_RED" "$C_RESET" "$1"; return 1; }
 ui_read(){ [ -z "$1" ] || printf '> %s' "$1"; [ -n "$1" ] || printf '> '; IFS= read -r REPLY || exit 0; }
 ui_pause(){ printf '\n'; ui_read "按回车返回主菜单"; }
 ui_confirm(){
@@ -38,19 +38,21 @@ ui_confirm(){
 }
 
 ui_progress(){
-    local percent="$1" label="$2" width=24 filled empty bar
+    local percent="$1" label="$2" width=20 filled empty bar
     [ "$percent" -lt 0 ] && percent=0; [ "$percent" -gt 100 ] && percent=100
     filled=$((percent * width / 100)); empty=$((width - filled))
-    bar=$(printf '%*s' "$filled" '' | tr ' ' '=')
-    bar="${bar}$(printf '%*s' "$empty" '' | tr ' ' '.')"
+    bar=$(printf '%*s' "$filled" '' | tr ' ' '#')
+    bar="${bar}$(printf '%*s' "$empty" '' | tr ' ' '-')"
     if [ -t 1 ]; then
-        printf '\r[%s] %3s%% %s' "$bar" "$percent" "$label"
-        [ "$percent" -lt 100 ] || printf '\n'
+        printf '\r\033[K[%s] %3s%% %s' "$bar" "$percent" "$label"
     else
         printf '[%3s%%] %s\n' "$percent" "$label"
     fi
 }
 
+ui_progress_finish(){
+    if [ -t 1 ]; then printf '\r\033[K'; else :; fi
+}
 
 
 platform_init(){
@@ -453,9 +455,10 @@ artifact_fetch(){
     rm -rf "$archive" "$extract"; mkdir -p "$extract" || return 1
     ui_progress 25 "下载 Snell v${version}"
     if [ -t 2 ]; then
+        ui_progress_finish
         curl -fL --progress-bar --proto '=https' --tlsv1.2 --retry 2 --retry-delay 1 --max-time 60 --max-filesize 52428800 \
             -o "$archive" "$artifact_url" || return 1
-        printf '\n'
+        printf '\r\033[K'
     elif ! curl -fsSL --proto '=https' --tlsv1.2 --retry 2 --retry-delay 1 --max-time 60 --max-filesize 52428800 \
         -o "$archive" "$artifact_url" >/dev/null 2>&1; then
         return 1
