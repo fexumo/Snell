@@ -160,17 +160,22 @@ service_pid(){
     esac
 }
 
-state_refresh(){
-    rt_artifacts=false; rt_installed=false; rt_config_valid=false; rt_running=false; rt_enabled=false; rt_version=""; rt_protocol=""
+runtime_refresh(){
+    rt_artifacts=false; rt_running=false; rt_enabled=false; rt_version=""; rt_protocol=""
     artifacts_exist && rt_artifacts=true
     if [ -x "$SNELL_BIN" ] && [ -f "$SNELL_CONF" ]; then
         rt_version=$(installed_version 2>/dev/null) || true
         rt_protocol=$(config_protocol)
-        if config_load >/dev/null 2>&1; then
-            rt_config_valid=true; rt_installed=true
-        fi
         service_status || true
         service_enabled
+    fi
+}
+
+state_refresh(){
+    runtime_refresh
+    rt_installed=false; rt_config_valid=false
+    if [ -x "$SNELL_BIN" ] && [ -f "$SNELL_CONF" ] && config_load >/dev/null 2>&1; then
+        rt_config_valid=true; rt_installed=true
     fi
 }
 
@@ -218,6 +223,8 @@ account_create(){
         }
     fi
     mkdir -p "$SNELL_DIR" || return 1
+    chown "root:${APP}" "$SNELL_DIR" || return 1
+    chmod 0750 "$SNELL_DIR" || return 1
     touch "$SNELL_MARKER" || { account_remove_force; return 1; }
 }
 
@@ -343,7 +350,9 @@ installation_reconcile(){
     state_refresh
     [ "$rt_installed" = true ] || return 0
     [ "$rt_config_valid" = true ] || { ui_error "现有 Snell 配置无效，拒绝自动修改"; return 1; }
-    if [ "$(stat -c %U:%G:%a "$SNELL_CONF" 2>/dev/null)" = "root:${APP}:640" ] && service_managed; then return 0; fi
+    local dir_ok=false
+    [ "$(stat -c %U:%G:%a "$SNELL_DIR" 2>/dev/null)" = "root:${APP}:750" ] && dir_ok=true
+    if [ "$dir_ok" = true ] && [ "$(stat -c %U:%G:%a "$SNELL_CONF" 2>/dev/null)" = "root:${APP}:640" ] && service_managed; then return 0; fi
     account_create || return 1
     transaction_apply reconcile
 }
@@ -604,7 +613,7 @@ transaction_stage_abort(){
 transaction_apply(){
     local mode="$1" package_version="${2:-}"
     tx_mode="$mode"; tx_was_running=false; tx_was_enabled=false; tx_had_service=false; tx_had_version=false; tx_account_created=false; tx_cfg=""
-    if [ "$mode" != config ]; then state_refresh; fi
+    if [ "$mode" != config ]; then runtime_refresh; fi
     if [ "$mode" = install ]; then
         [ "$rt_artifacts" = false ] || { ui_error "检测到已安装文件或残留，请先卸载"; return 1; }
         ensure_dependencies || return 1
@@ -648,6 +657,8 @@ transaction_apply(){
     fi
 
     mkdir -p "$SNELL_DIR" || { transaction_rollback; return 1; }
+    chown "root:${APP}" "$SNELL_DIR" || { transaction_rollback; return 1; }
+    chmod 0750 "$SNELL_DIR" || { transaction_rollback; return 1; }
     tx_cfg=$(mktemp "${SNELL_CONF}.new.XXXXXX") || { transaction_rollback; return 1; }
     config_stage "$tx_cfg" || { transaction_rollback; return 1; }
     if [ "$mode" != install ] && [ "$tx_was_running" = true ]; then
