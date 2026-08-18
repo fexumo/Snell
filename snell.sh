@@ -29,7 +29,11 @@ ui_clear(){ [ -z "${TERM:-}" ] || clear 2>/dev/null || true; }
 ui_ok(){ [ -t 1 ] && printf '\r\033[K'; printf '%b✓%b %s\n' "$C_GREEN" "$C_RESET" "$1"; }
 ui_warn(){ [ -t 1 ] && printf '\r\033[K'; printf '%b!%b %s\n' "$C_YELLOW" "$C_RESET" "$1"; }
 ui_error(){ [ -t 1 ] && printf '\r\033[K'; printf '%b✗%b %s\n' "$C_RED" "$C_RESET" "$1"; return 1; }
-ui_read(){ [ -z "$1" ] || printf '> %s' "$1"; [ -n "$1" ] || printf '> '; IFS= read -r REPLY || exit 0; }
+ui_read(){
+    [ -z "$1" ] || printf '> %s' "$1"
+    [ -n "$1" ] || printf '> '
+    IFS= read -r REPLY || { printf '\n'; exit 0; }
+}
 ui_pause(){ printf '\n'; ui_read "按回车返回"; }
 ui_confirm(){
     local prompt="$1" default="${2:-n}"
