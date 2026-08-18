@@ -19,7 +19,7 @@ RELEASE_PAGE="https://kb.nssurge.com/surge-knowledge-base/zh/release-notes/snell
 DOWNLOAD_BASE="https://dl.nssurge.com/snell"
 
 C_GREEN="\033[32m"; C_RED="\033[31m"; C_YELLOW="\033[33m"; C_RESET="\033[0m"
-rt_os=""; rt_arch=""; rt_backend=""; rt_artifacts=false; rt_installed=false; rt_config_valid=false; rt_running=false; rt_enabled=false; rt_version=""; rt_protocol=""
+rt_os=""; rt_arch=""; rt_backend=""; rt_artifacts=false; rt_installed=false; rt_config_valid=false; rt_running=false; rt_enabled=false; rt_version=""; rt_protocol=""; deps_ready=false
 release_html=""; release_version=""; release_v5=""; release_v6=""; artifact_url=""; version_cmp=0
 panel_major=""; panel_latest=""
 cfg_listen=""; cfg_port=""; cfg_version=""; cfg_psk=""; cfg_ipv6=false; cfg_obfs=off; cfg_host=""; cfg_tfo=true; cfg_dns_pref=""; cfg_mode=""; cfg_egress=""
@@ -36,6 +36,22 @@ ui_confirm(){
     ui_read "$prompt"; REPLY="${REPLY:-$default}"
     case "$REPLY" in [Yy]) return 0 ;; [Nn]) return 1 ;; *) ui_error "请输入 y 或 n"; return 1 ;; esac
 }
+
+ui_progress(){
+    local percent="$1" label="$2" width=24 filled empty bar
+    [ "$percent" -lt 0 ] && percent=0; [ "$percent" -gt 100 ] && percent=100
+    filled=$((percent * width / 100)); empty=$((width - filled))
+    bar=$(printf '%*s' "$filled" '' | tr ' ' '=')
+    bar="${bar}$(printf '%*s' "$empty" '' | tr ' ' '.')"
+    if [ -t 1 ]; then
+        printf '\r[%s] %3s%% %s' "$bar" "$percent" "$label"
+        [ "$percent" -lt 100 ] || printf '\n'
+    else
+        printf '[%3s%%] %s\n' "$percent" "$label"
+    fi
+}
+
+
 
 platform_init(){
     [ "$(id -u)" = 0 ] || { ui_error "需要 Root 权限，请使用 sudo -i"; exit 1; }
@@ -60,9 +76,13 @@ platform_init(){
 }
 
 ensure_dependencies(){
+    [ "$deps_ready" = true ] && return 0
+    ui_progress 8 "检查系统依赖"
     if [ "$rt_os" = alpine ]; then
-        apk add --no-cache curl unzip file tzdata gcompat upx iproute2 >/dev/null 2>&1 || ui_error "依赖安装失败"
-        return
+        apk add --no-cache curl unzip file tzdata gcompat upx iproute2 >/dev/null 2>&1 || { ui_error "依赖安装失败"; return 1; }
+        ui_progress 15 "依赖已就绪"
+        deps_ready=true
+        return 0
     fi
     local packages=""
     command -v curl >/dev/null 2>&1 || packages="$packages curl"
@@ -74,6 +94,8 @@ ensure_dependencies(){
         # shellcheck disable=SC2086
         if ! apt-get update >/dev/null 2>&1 || ! apt-get install -y $packages >/dev/null 2>&1; then ui_error "依赖安装失败"; return 1; fi
     fi
+    ui_progress 15 "依赖已就绪"
+    deps_ready=true
 }
 
 artifacts_exist(){
@@ -418,21 +440,34 @@ release_latest(){
     return 1
 }
 
-resolve_release(){ release_latest "$1" || { ui_error "无法从 Surge 官方发布页获取 v$1 可下载版本"; return 1; }; }
+resolve_release(){
+    ensure_dependencies || return 1
+    ui_progress 18 "查询 Surge 官方版本"
+    release_latest "$1" || { ui_error "无法从 Surge 官方发布页获取 v$1 可下载版本"; return 1; }
+}
 
 artifact_fetch(){
     local version="$1" target="$2" work archive extract entries size binary kind
     artifact_url_for "$version" || { ui_error "Surge 未提供 Snell v${version%%.*} 的 Linux ${rt_arch} 构建"; return 1; }
     work=$(dirname "$target"); archive="$work/package.zip"; extract="$work/unpack"
     rm -rf "$archive" "$extract"; mkdir -p "$extract" || return 1
-    if ! curl -fsSL --proto '=https' --tlsv1.2 --retry 2 --retry-delay 1 --max-time 60 --max-filesize 52428800 \
-        -o "$archive" "$artifact_url" >/dev/null 2>&1; then return 1; fi
+    ui_progress 25 "下载 Snell v${version}"
+    if [ -t 2 ]; then
+        curl -fL --progress-bar --proto '=https' --tlsv1.2 --retry 2 --retry-delay 1 --max-time 60 --max-filesize 52428800 \
+            -o "$archive" "$artifact_url" || return 1
+        printf '\n'
+    elif ! curl -fsSL --proto '=https' --tlsv1.2 --retry 2 --retry-delay 1 --max-time 60 --max-filesize 52428800 \
+        -o "$archive" "$artifact_url" >/dev/null 2>&1; then
+        return 1
+    fi
+    ui_progress 55 "校验下载包"
     entries=$(unzip -Z1 "$archive" 2>/dev/null)
     size=$(unzip -l "$archive" 2>/dev/null | awk '$4=="snell-server"{print $1;exit}')
     case "$size" in ''|*[!0-9]*) size=0 ;; esac
     [ "$entries" = snell-server ] || { ui_error "下载包结构无效"; return 1; }
     if [ "$size" -le 0 ] || [ "$size" -gt 52428800 ]; then ui_error "下载包解压大小异常"; return 1; fi
     if ! unzip -oq "$archive" -d "$extract" >/dev/null 2>&1; then ui_error "Snell Server 解压失败"; return 1; fi
+    ui_progress 65 "验证二进制"
     binary="$extract/snell-server"
     if [ ! -f "$binary" ] || [ -L "$binary" ]; then ui_error "下载包内容无效"; return 1; fi
     if [ "$rt_os" = alpine ] && upx -t "$binary" >/dev/null 2>&1; then
@@ -448,6 +483,7 @@ artifact_fetch(){
     "$binary" -v >/dev/null 2>&1 || { ui_error "下载的二进制无法在当前系统运行"; return 1; }
     mv -f "$binary" "$target" || return 1
     rm -rf "$archive" "$extract"
+    ui_progress 70 "制品验证完成"
 }
 
 config_reset(){
@@ -613,6 +649,7 @@ transaction_stage_abort(){
 transaction_apply(){
     local mode="$1" package_version="${2:-}"
     tx_mode="$mode"; tx_was_running=false; tx_was_enabled=false; tx_had_service=false; tx_had_version=false; tx_account_created=false; tx_cfg=""
+    case "$mode" in install) ui_progress 18 "准备安装事务" ;; binary) ui_progress 18 "准备更新事务" ;; config) ui_progress 20 "准备配置事务" ;; reconcile) ui_progress 20 "协调服务定义" ;; esac
     if [ "$mode" != config ]; then runtime_refresh; fi
     if [ "$mode" = install ]; then
         [ "$rt_artifacts" = false ] || { ui_error "检测到已安装文件或残留，请先卸载"; return 1; }
@@ -665,6 +702,7 @@ transaction_apply(){
         if ! service_ctl stop; then transaction_rollback; return 1; fi
     fi
     if ! service_install; then transaction_rollback; return 1; fi
+    ui_progress 82 "提交服务定义"
     if [ "$mode" != install ] && [ "$tx_was_enabled" = false ]; then
         if ! service_set_enabled "$tx_was_enabled"; then transaction_rollback; return 1; fi
     fi
@@ -674,8 +712,10 @@ transaction_apply(){
     if [ "$mode" != config ] && [ "$mode" != reconcile ] && ! version_write "$package_version"; then transaction_rollback; return 1; fi
 
     if [ "$mode" = install ] || [ "$tx_was_running" = true ]; then
+        ui_progress 90 "启动服务"
         if ! service_ctl start || ! service_wait; then service_log; transaction_rollback; return 1; fi
     fi
+    ui_progress 100 "完成"
     trap - HUP INT TERM
     rm -rf "$tx_dir"
     panel_major=""; panel_latest=""
@@ -844,7 +884,6 @@ action_install(){
     printf '\n安装协议\n 1) v5（Surge 官方最新版本）\n 2) v6（Surge 官方最新版本）\n'
     ui_read "选择 [1/2]（默认 1）："
     case "${REPLY:-1}" in 1) major=5 ;; 2) major=6 ;; *) ui_error "仅支持 1 或 2"; return 1 ;; esac
-    ensure_dependencies || return 1
     resolve_release "$major" || return 1
     ui_warn "即将安装 Snell v${release_version}（协议 v${major}）"
     ui_confirm "确认安装？(Y/n)：" y || { ui_ok "已取消安装"; return 0; }
