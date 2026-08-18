@@ -38,7 +38,19 @@ ui_confirm(){
 }
 
 ui_progress(){
-    local percent="$1" label="$2" width=20 filled empty bar
+    local percent="$1" label="$2" cols=80 width=20 filled empty bar max_label label_len
+    if [ -t 1 ]; then
+        cols="${COLUMNS:-}"
+        [ -n "$cols" ] || cols=$(stty size 2>/dev/null | awk '{print $2}')
+        [ -n "$cols" ] || cols=$(tput cols 2>/dev/null || printf '80')
+        case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
+        max_label=$(( (cols - 12) / 2 )); [ "$max_label" -lt 2 ] && max_label=2
+        label=$(printf '%s' "$label" | awk -v n="$max_label" '{print substr($0,1,n)}')
+        label_len=$(printf '%s' "$label" | wc -m)
+        width=$((cols - label_len * 2 - 9))
+        [ "$width" -lt 4 ] && width=4
+        [ "$width" -gt 20 ] && width=20
+    fi
     [ "$percent" -lt 0 ] && percent=0; [ "$percent" -gt 100 ] && percent=100
     filled=$((percent * width / 100)); empty=$((width - filled))
     bar=$(printf '%*s' "$filled" '' | tr ' ' '#')
@@ -46,7 +58,7 @@ ui_progress(){
     if [ -t 1 ]; then
         printf '\r\033[K[%s] %3s%% %s' "$bar" "$percent" "$label"
     else
-        printf '[%3s%%] %s\n' "$percent" "$label"
+        printf '[%3s%%] %s\n' "$percent" "$2"
     fi
 }
 
