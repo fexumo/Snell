@@ -26,10 +26,12 @@ cfg_listen=""; cfg_port=""; cfg_version=""; cfg_psk=""; cfg_ipv6=false; cfg_obfs
 tx_dir=""; tx_cfg=""; tx_mode=""; tx_was_running=false; tx_was_enabled=false; tx_had_service=false; tx_had_version=false; tx_account_created=false
 
 ui_clear(){ [ -z "${TERM:-}" ] || clear 2>/dev/null || true; }
-ui_ok(){ [ -t 1 ] && printf '\r\033[K'; printf '%b✓%b %s\n' "$C_GREEN" "$C_RESET" "$1"; }
-ui_warn(){ [ -t 1 ] && printf '\r\033[K'; printf '%b!%b %s\n' "$C_YELLOW" "$C_RESET" "$1"; }
-ui_error(){ [ -t 1 ] && printf '\r\033[K'; printf '%b✗%b %s\n' "$C_RED" "$C_RESET" "$1"; return 1; }
+ui_clear_line(){ [ -t 1 ] && printf '\r\033[K'; }
+ui_ok(){ ui_clear_line; printf '%b✓%b %s\n' "$C_GREEN" "$C_RESET" "$1"; }
+ui_warn(){ ui_clear_line; printf '%b!%b %s\n' "$C_YELLOW" "$C_RESET" "$1"; }
+ui_error(){ ui_clear_line; printf '%b✗%b %s\n' "$C_RED" "$C_RESET" "$1"; return 1; }
 ui_read(){
+    ui_clear_line
     [ -z "$1" ] || printf '> %s' "$1"
     [ -n "$1" ] || printf '> '
     IFS= read -r REPLY || { printf '\n'; exit 0; }
@@ -57,7 +59,7 @@ ui_progress(){
     fi
     [ "$percent" -lt 0 ] && percent=0; [ "$percent" -gt 100 ] && percent=100
     if [ "$percent" -eq 100 ]; then
-        [ -t 1 ] && printf '\r\033[K'
+        ui_clear_line
         return 0
     fi
     filled=$((percent * width / 100)); empty=$((width - filled))
@@ -507,7 +509,9 @@ config_reset(){
 
 config_validate(){
     case "$cfg_version" in 5|6) ;; *) ui_error "协议版本无效"; return 1 ;; esac
-    if ! printf '%s' "$cfg_port" | grep -qE '^[0-9]+$' || [ "$cfg_port" -lt 1 ] || [ "$cfg_port" -gt 65535 ]; then ui_error "监听端口无效"; return 1; fi
+    if [ -z "$cfg_listen" ] || ! printf '%s\n' "$cfg_listen" | awk -F, '
+        { for (i=1; i<=NF; i++) { p=$i; bad=0; for(j=1;j<=length(p);j++){c=substr(p,j,1); if(c !~ /[A-Za-z0-9_.:,]/ && c!="[" && c!="]" && c!="-") bad=1} q=p; sub(/^.*:/, "", q); if(bad || q !~ /^[0-9]+$/ || q + 0 < 1 || q + 0 > 65535) exit 1 } }
+    '; then ui_error "监听地址格式无效"; return 1; fi
     if [ ${#cfg_psk} -lt 16 ] || [ ${#cfg_psk} -gt 255 ]; then ui_error "密钥必须为 16-255 位"; return 1; fi
     case "$cfg_psk" in *[!A-Za-z0-9._~-]*) ui_error "密钥包含不安全字符"; return 1 ;; esac
     case "$cfg_tfo" in true|false) ;; *) ui_error "TCP Fast Open 配置无效"; return 1 ;; esac
@@ -709,6 +713,7 @@ transaction_apply(){
     chmod 0750 "$SNELL_DIR" || { transaction_rollback; return 1; }
     tx_cfg=$(mktemp "${SNELL_CONF}.new.XXXXXX") || { transaction_rollback; return 1; }
     config_stage "$tx_cfg" || { transaction_rollback; return 1; }
+    trap 'transaction_rollback; exit 130' HUP INT TERM
     if [ "$mode" != install ] && [ "$tx_was_running" = true ]; then
         if ! service_ctl stop; then transaction_rollback; return 1; fi
     fi
@@ -841,7 +846,8 @@ edit_version(){
 
 header_render(){
     local status installed major
-    ui_clear; printf '\n'; state_refresh
+    ui_clear; printf '\n'
+    state_refresh
     if [ "$rt_installed" != true ]; then
         [ "$rt_artifacts" = true ] && printf 'server: incomplete installation\n' || printf 'server: not installed\n'
         return
@@ -1089,7 +1095,7 @@ view_status(){
     state_refresh; [ "$rt_installed" = true ] || { ui_error "请先安装 Snell Server"; return 1; }
     config_load || return 1
     ui_progress 70 "整理状态信息"
-    header_render; state_refresh
+    header_render
     service_text="已停止"; [ "$rt_running" = true ] && service_text="运行中"
     printf '\n状态\n安装版本  : v%s\n协议版本  : v%s\n监听端口  : %s\n服务状态  : %s\n' "${rt_version:-?}" "$cfg_version" "$cfg_port" "$service_text"
     if [ "$rt_running" = true ]; then
