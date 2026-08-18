@@ -863,33 +863,27 @@ header_render(){
     fi
 }
 
-action_start(){
+action_service(){
+    local action="$1" stage success
+    case "$action" in
+        start) stage="启动服务"; success="Snell Server 已启动" ;;
+        stop) stage="停止服务"; success="Snell Server 已停止" ;;
+        restart) stage="重启服务"; success="Snell Server 已重启" ;;
+        *) return 1 ;;
+    esac
     ui_progress 10 "检查服务状态"
     state_refresh; [ "$rt_installed" = true ] || { ui_error "请先安装 Snell Server"; return 1; }
-    [ "$rt_running" = false ] || { ui_progress 100 "服务已在运行"; ui_ok "Snell Server 已在运行"; return 0; }
-    ui_progress 70 "启动服务"
-    if ! service_ctl start || ! service_wait; then ui_error "启动失败"; service_log; return 1; fi
+    if [ "$action" = start ] && [ "$rt_running" = true ]; then
+        ui_progress 100 "服务已在运行"; ui_ok "Snell Server 已在运行"; return 0
+    fi
+    if [ "$action" = stop ] && [ "$rt_running" = false ]; then
+        ui_progress 100 "服务未运行"; ui_warn "Snell Server 未运行"; return 0
+    fi
+    ui_progress 70 "$stage"
+    if ! service_ctl "$action"; then ui_error "${stage}失败"; return 1; fi
+    if [ "$action" != stop ] && ! service_wait; then ui_error "${stage}失败"; service_log; return 1; fi
     ui_progress 100 "完成"
-    ui_ok "Snell Server 已启动"
-}
-
-action_stop(){
-    ui_progress 10 "检查服务状态"
-    state_refresh; [ "$rt_installed" = true ] || { ui_error "请先安装 Snell Server"; return 1; }
-    [ "$rt_running" = true ] || { ui_progress 100 "服务未运行"; ui_warn "Snell Server 未运行"; return 0; }
-    ui_progress 70 "停止服务"
-    if ! service_ctl stop; then ui_error "停止失败"; return 1; fi
-    ui_progress 100 "完成"
-    ui_ok "Snell Server 已停止"
-}
-
-action_restart(){
-    ui_progress 10 "检查服务状态"
-    state_refresh; [ "$rt_installed" = true ] || { ui_error "请先安装 Snell Server"; return 1; }
-    ui_progress 70 "重启服务"
-    if ! service_ctl restart || ! service_wait; then ui_error "重启失败"; service_log; return 1; fi
-    ui_progress 100 "完成"
-    ui_ok "Snell Server 已重启"
+    ui_ok "$success"
 }
 
 action_install(){
@@ -1120,9 +1114,9 @@ main_menu(){
         case "$REPLY" in
             0) ui_ok "已退出脚本"; exit 0 ;;
             1) action_install ;;
-            2) action_start ;;
-            3) action_stop ;;
-            4) action_restart ;;
+            2) action_service start ;;
+            3) action_service stop ;;
+            4) action_service restart ;;
             5) action_config ;;
             6) view_config ;;
             7) view_status ;;
