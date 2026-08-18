@@ -52,6 +52,10 @@ ui_progress(){
         [ "$width" -gt 20 ] && width=20
     fi
     [ "$percent" -lt 0 ] && percent=0; [ "$percent" -gt 100 ] && percent=100
+    if [ "$percent" -eq 100 ]; then
+        [ -t 1 ] && printf '\r\033[K'
+        return 0
+    fi
     filled=$((percent * width / 100)); empty=$((width - filled))
     bar=$(printf '%*s' "$filled" '' | tr ' ' '#')
     bar="${bar}$(printf '%*s' "$empty" '' | tr ' ' '-')"
