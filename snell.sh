@@ -30,7 +30,7 @@ ui_ok(){ [ -t 1 ] && printf '\r\033[K'; printf '%b✓%b %s\n' "$C_GREEN" "$C_RES
 ui_warn(){ [ -t 1 ] && printf '\r\033[K'; printf '%b!%b %s\n' "$C_YELLOW" "$C_RESET" "$1"; }
 ui_error(){ [ -t 1 ] && printf '\r\033[K'; printf '%b✗%b %s\n' "$C_RED" "$C_RESET" "$1"; return 1; }
 ui_read(){ [ -z "$1" ] || printf '> %s' "$1"; [ -n "$1" ] || printf '> '; IFS= read -r REPLY || exit 0; }
-ui_pause(){ printf '\n'; ui_read "按回车返回主菜单"; }
+ui_pause(){ printf '\n'; ui_read "按回车返回"; }
 ui_confirm(){
     local prompt="$1" default="${2:-n}"
     ui_read "$prompt"; REPLY="${REPLY:-$default}"
@@ -91,10 +91,10 @@ platform_init(){
 
 ensure_dependencies(){
     [ "$deps_ready" = true ] && return 0
-    ui_progress 8 "检查系统依赖"
+    ui_progress 8 "检查依赖"
     if [ "$rt_os" = alpine ]; then
         apk add --no-cache curl unzip file tzdata gcompat upx iproute2 >/dev/null 2>&1 || { ui_error "依赖安装失败"; return 1; }
-        ui_progress 15 "依赖已就绪"
+        ui_progress 15 "依赖就绪"
         deps_ready=true
         return 0
     fi
@@ -108,7 +108,7 @@ ensure_dependencies(){
         # shellcheck disable=SC2086
         if ! apt-get update >/dev/null 2>&1 || ! apt-get install -y $packages >/dev/null 2>&1; then ui_error "依赖安装失败"; return 1; fi
     fi
-    ui_progress 15 "依赖已就绪"
+    ui_progress 15 "依赖就绪"
     deps_ready=true
 }
 
@@ -477,7 +477,7 @@ artifact_fetch(){
     [ "$entries" = snell-server ] || { ui_error "下载包结构无效"; return 1; }
     if [ "$size" -le 0 ] || [ "$size" -gt 52428800 ]; then ui_error "下载包解压大小异常"; return 1; fi
     if ! unzip -oq "$archive" -d "$extract" >/dev/null 2>&1; then ui_error "Snell Server 解压失败"; return 1; fi
-    ui_progress 65 "验证二进制"
+    ui_progress 65 "校验二进制"
     binary="$extract/snell-server"
     if [ ! -f "$binary" ] || [ -L "$binary" ]; then ui_error "下载包内容无效"; return 1; fi
     if [ "$rt_os" = alpine ] && upx -t "$binary" >/dev/null 2>&1; then
@@ -1114,7 +1114,7 @@ main_menu(){
     while true; do
         header_render
         printf '\n 1) 安装服务    2) 启动服务\n 3) 停止服务    4) 重启服务\n 5) 设置配置    6) 查看配置\n 7) 查看状态    8) 更新服务\n 9) 卸载服务    0) 退出脚本\n\n'
-        ui_read ""
+    ui_read "请输入选项 [0-9]: "
         case "$REPLY" in
             0) ui_ok "已退出脚本"; exit 0 ;;
             1) action_install ;;
