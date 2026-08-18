@@ -864,22 +864,31 @@ header_render(){
 }
 
 action_start(){
+    ui_progress 10 "检查服务状态"
     state_refresh; [ "$rt_installed" = true ] || { ui_error "请先安装 Snell Server"; return 1; }
-    [ "$rt_running" = false ] || { ui_ok "Snell Server 已在运行"; return 0; }
+    [ "$rt_running" = false ] || { ui_progress 100 "服务已在运行"; ui_ok "Snell Server 已在运行"; return 0; }
+    ui_progress 70 "启动服务"
     if ! service_ctl start || ! service_wait; then ui_error "启动失败"; service_log; return 1; fi
+    ui_progress 100 "完成"
     ui_ok "Snell Server 已启动"
 }
 
 action_stop(){
+    ui_progress 10 "检查服务状态"
     state_refresh; [ "$rt_installed" = true ] || { ui_error "请先安装 Snell Server"; return 1; }
-    [ "$rt_running" = true ] || { ui_warn "Snell Server 未运行"; return 0; }
-    service_ctl stop || { ui_error "停止失败"; return 1; }
+    [ "$rt_running" = true ] || { ui_progress 100 "服务未运行"; ui_warn "Snell Server 未运行"; return 0; }
+    ui_progress 70 "停止服务"
+    if ! service_ctl stop; then ui_error "停止失败"; return 1; fi
+    ui_progress 100 "完成"
     ui_ok "Snell Server 已停止"
 }
 
 action_restart(){
+    ui_progress 10 "检查服务状态"
     state_refresh; [ "$rt_installed" = true ] || { ui_error "请先安装 Snell Server"; return 1; }
+    ui_progress 70 "重启服务"
     if ! service_ctl restart || ! service_wait; then ui_error "重启失败"; service_log; return 1; fi
+    ui_progress 100 "完成"
     ui_ok "Snell Server 已重启"
 }
 
@@ -1003,10 +1012,12 @@ action_update(){
 }
 
 action_uninstall(){
-    state_refresh; [ "$rt_artifacts" = true ] || { ui_warn "Snell Server 未安装"; return 0; }
+    ui_progress 10 "检查安装状态"
+    state_refresh; [ "$rt_artifacts" = true ] || { ui_progress 100 "未安装"; ui_warn "Snell Server 未安装"; return 0; }
     printf '\n将删除主程序、服务和 %s。\n' "$SNELL_DIR"
     ui_confirm "确认卸载？(y/N)：" n || { ui_ok "已取消卸载"; return 0; }
     [ "$rt_running" = false ] || service_ctl stop || { ui_error "无法停止服务"; return 1; }
+    ui_progress 55 "清理服务与账户"
     stop_orphans || { ui_error "仍有 Snell 进程无法终止"; return 1; }
     service_remove
     account_remove || { ui_error "无法删除系统用户"; return 1; }
@@ -1014,6 +1025,7 @@ action_uninstall(){
     rm -rf "$SNELL_DIR"
     state_refresh
     [ "$rt_artifacts" = false ] || { ui_error "卸载后仍有残留"; return 1; }
+    ui_progress 100 "完成"
     ui_ok "Snell Server 已卸载"
 }
 
@@ -1044,8 +1056,10 @@ surge_line(){
 
 view_config(){
     local tmp address
+    ui_progress 10 "读取配置"
     state_refresh; [ "$rt_installed" = true ] || { ui_error "请先安装 Snell Server"; return 1; }
     config_load || return 1
+    ui_progress 35 "获取公网地址"
     tmp=$(mktemp -d /tmp/snell-address.XXXXXX) || return 1
     trap 'rm -rf "$tmp"; exit 130' HUP INT TERM
     ( public_ipv4; printf '%s\n' "$public_v4" >"$tmp/v4" ) &
@@ -1053,6 +1067,7 @@ view_config(){
     wait
     public_v4=$(cat "$tmp/v4" 2>/dev/null); public_v6=$(cat "$tmp/v6" 2>/dev/null)
     rm -rf "$tmp"; trap - HUP INT TERM
+    ui_progress 75 "生成 Surge 配置"
     address="${public_v4:-${public_v6:+[$public_v6]}}"
     header_render
     printf '\n配置\n文件      : %s\n端口      : %s\n密钥      : %s\n协议      : v%s\nTFO       : %s\n' "$SNELL_CONF" "$cfg_port" "$cfg_psk" "$cfg_version" "$cfg_tfo"
@@ -1065,13 +1080,17 @@ view_config(){
     if [ -n "$cfg_egress" ]; then printf '出口网卡  : %s\n' "$cfg_egress"; fi
     printf '\nSurge 配置：\n'
     if [ -n "$address" ]; then surge_line "$address"; else ui_error "无法获取公网 IP"; fi
+    ui_progress 100 "完成"
     ui_pause
 }
 
 view_status(){
     local pid started service_text log_command
+    ui_progress 10 "读取服务状态"
     state_refresh; [ "$rt_installed" = true ] || { ui_error "请先安装 Snell Server"; return 1; }
-    config_load || return 1; header_render; state_refresh
+    config_load || return 1
+    ui_progress 70 "整理状态信息"
+    header_render; state_refresh
     service_text="已停止"; [ "$rt_running" = true ] && service_text="运行中"
     printf '\n状态\n安装版本  : v%s\n协议版本  : v%s\n监听端口  : %s\n服务状态  : %s\n' "${rt_version:-?}" "$cfg_version" "$cfg_port" "$service_text"
     if [ "$rt_running" = true ]; then
@@ -1089,6 +1108,7 @@ view_status(){
     fi
     if [ "$rt_backend" = systemd ]; then log_command='journalctl -u snell-server -n 50'; else log_command="tail -50 $LOG_FILE"; fi
     printf '日志      : %s\n' "$log_command"
+    ui_progress 100 "完成"
     ui_pause
 }
 
