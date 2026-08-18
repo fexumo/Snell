@@ -600,14 +600,11 @@ restore_atomic(){
 }
 
 service_restore(){
-    if [ "$rt_backend" = systemd ]; then
-        restore_atomic "$tx_dir/service" "$SYSTEMD_UNIT" 0644 root:root || return 1
-        systemctl daemon-reload >/dev/null 2>&1 || return 1
-        if ! service_set_enabled "$tx_was_enabled"; then return 1; fi
-    else
-        restore_atomic "$tx_dir/service" "$OPENRC_INIT" 0755 root:root || return 1
-        if ! service_set_enabled "$tx_was_enabled"; then return 1; fi
-    fi
+    local file mode
+    if [ "$rt_backend" = systemd ]; then file="$SYSTEMD_UNIT"; mode=0644; else file="$OPENRC_INIT"; mode=0755; fi
+    restore_atomic "$tx_dir/service" "$file" "$mode" root:root || return 1
+    [ "$rt_backend" != systemd ] || systemctl daemon-reload >/dev/null 2>&1 || return 1
+    service_set_enabled "$tx_was_enabled"
 }
 
 transaction_rollback(){
@@ -672,7 +669,7 @@ transaction_apply(){
         fi
     else
         if [ ! -x "$SNELL_BIN" ] || [ ! -f "$SNELL_CONF" ]; then ui_error "Snell Server 未完整安装"; return 1; fi
-        service_status || { ui_error "无法确认服务状态"; return 1; }
+        service_status || { ui_error "无法确认服务状态，操作已取消"; return 1; }
         tx_was_running="$rt_running"; tx_was_enabled="$rt_enabled"
         if [ "$rt_backend" = systemd ]; then [ -f "$SYSTEMD_UNIT" ] && tx_had_service=true
         else [ -f "$OPENRC_INIT" ] && tx_had_service=true
