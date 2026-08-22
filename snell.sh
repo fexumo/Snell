@@ -523,7 +523,7 @@ config_validate(){
         { for (i=1; i<=NF; i++) { p=$i; bad=0; for(j=1;j<=length(p);j++){c=substr(p,j,1); if(c !~ /[A-Za-z0-9_.:,]/ && c!="[" && c!="]" && c!="-") bad=1} q=p; sub(/^.*:/, "", q); a=p; sub(/:[^:]*$/, "", a); if(bad || q !~ /^[0-9]+$/ || q + 0 < 1 || q + 0 > 65535 || (a ~ /:/ && a !~ /^\[.*\]$/)) exit 1 } }
     '; then ui_error "监听地址格式无效"; return 1; fi
     if [ ${#cfg_psk} -lt 16 ] || [ ${#cfg_psk} -gt 255 ]; then ui_error "密钥必须为 16-255 位"; return 1; fi
-    case "$cfg_psk" in *[!A-Za-z0-9._~-]*) ui_error "密钥包含不安全字符"; return 1 ;; esac
+    case "$cfg_psk" in *[!A-Za-z0-9]*) ui_error "密钥仅允许字母和数字"; return 1 ;; esac
     case "$cfg_tfo" in true|false) ;; *) ui_error "TCP Fast Open 配置无效"; return 1 ;; esac
     if [ "$cfg_version" = 5 ]; then
         case "$cfg_ipv6" in true|false) ;; *) ui_error "目标 IPv6 配置无效"; return 1 ;; esac
@@ -790,9 +790,9 @@ edit_psk(){
         else value="$REPLY"
         fi
         if [ ${#value} -ge 16 ] && [ ${#value} -le 255 ]; then
-            case "$value" in *[!A-Za-z0-9._~-]*) ;; *) cfg_psk="$value"; return 0 ;; esac
+            case "$value" in *[!A-Za-z0-9]*) ;; *) cfg_psk="$value"; return 0 ;; esac
         fi
-        ui_error "密钥需为 16-255 位，且仅允许字母、数字及 . _ ~ -"
+        ui_error "密钥需为 16-255 位，且仅允许字母和数字"
     done
 }
 
