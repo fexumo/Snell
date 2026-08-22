@@ -41,6 +41,8 @@ apk add bash
 11) 全部配置
 ```
 
+输入菜单项编号执行，回车返回主菜单；所有编辑项直接回车均保留当前值（密钥除外，回车会生成新的随机密钥）。
+
 支持安装/更新官方最新可下载版本，显示依赖、版本查询、下载、校验、提交和启动进度；
 
 面板显示本机安装版本；官网可访问时同步显示 Surge 发布页中当前架构可下载的最新版本，有更新时提示「可更新」。官网不可访问时只显示本地状态，60 秒后自动重试。
@@ -74,6 +76,8 @@ my-server = snell, 1.2.3.4, 8443, psk=your-psk, version=6, mode=default, reuse=t
 # v5 + TLS OBFS
 my-server = snell, 1.2.3.4, 8443, psk=your-psk, version=5, obfs=tls, obfs-host=www.wechat.com, reuse=true, tfo=true
 ```
+
+公网地址通过多源查询获取：IPv4 依次尝试 ipinfo.io、api.ip.sb、3322（公云），IPv6 依次尝试 ifconfig.co、icanhazip、ipify，单个源失败自动切换，全部失败时提示无法获取（此时可手动填写）。
 
 ## 版本与安全
 
