@@ -1150,7 +1150,7 @@ view_config(){
     fi
     if [ -n "$cfg_egress" ]; then printf '出口网卡  : %s\n' "$cfg_egress"; fi
     printf '\nSurge 配置：\n'
-    if [ -n "$address" ]; then surge_line "$address"; else ui_error "无法获取公网 IP，请检查网络后重试"; fi
+    if [ -n "$address" ]; then surge_line "$address"; else ui_error "无法获取公网 IP：请检查出站网络；NAT/内网环境请用 ip addr 查询后手动填写"; fi
     ui_progress 100 "完成"
     ui_pause
 }
