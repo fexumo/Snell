@@ -761,9 +761,9 @@ edit_port(){
 edit_psk(){
     local value
     while true; do
-        ui_read "密钥 [16-255 位]（回车保留或随机生成 16 位）："
+        ui_read "密钥 [16-255 位]（回车随机生成 16 位）："
         if [ -z "$REPLY" ]; then
-            if [ ${#cfg_psk} -ge 16 ] && [ ${#cfg_psk} -le 255 ]; then value="$cfg_psk"; else value=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 16); fi
+            value=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 16)
         else value="$REPLY"
         fi
         if [ ${#value} -ge 16 ] && [ ${#value} -le 255 ]; then
