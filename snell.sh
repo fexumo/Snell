@@ -21,7 +21,7 @@ DOWNLOAD_BASE="https://dl.nssurge.com/snell"
 C_GREEN="\033[32m"; C_RED="\033[31m"; C_YELLOW="\033[33m"; C_RESET="\033[0m"
 rt_os=""; rt_arch=""; rt_backend=""; rt_artifacts=false; rt_installed=false; rt_config_valid=false; rt_running=false; rt_enabled=false; rt_version=""; rt_protocol=""; deps_ready=false
 release_html=""; release_version=""; release_v5=""; release_v6=""; artifact_url=""; version_cmp=0
-panel_major=""; panel_latest=""
+panel_major=""; panel_latest=""; panel_retry=0
 cfg_listen=""; cfg_port=""; cfg_version=""; cfg_psk=""; cfg_ipv6=false; cfg_obfs=off; cfg_host=""; cfg_tfo=true; cfg_dns_pref=""; cfg_mode=""; cfg_egress=""
 tx_dir=""; tx_cfg=""; tx_mode=""; tx_was_running=false; tx_was_enabled=false; tx_had_service=false; tx_had_version=false; tx_account_created=false
 
@@ -99,7 +99,13 @@ ensure_dependencies(){
     [ "$deps_ready" = true ] && return 0
     ui_progress 8 "检查依赖"
     if [ "$rt_os" = alpine ]; then
-        apk add --no-cache curl unzip file tzdata gcompat upx iproute2 >/dev/null 2>&1 || { ui_error "依赖安装失败"; return 1; }
+        if ! apk add --no-cache curl unzip file tzdata gcompat upx iproute2 >/dev/null 2>&1; then
+            if apk add --no-cache curl unzip file tzdata gcompat iproute2 >/dev/null 2>&1; then
+                ui_warn "upx 不可用：不影响 v6；v5 安装/更新时需先 apk add upx"
+            else
+                ui_error "依赖安装失败"; return 1
+            fi
+        fi
         ui_progress 15 "依赖就绪"
         deps_ready=true
         return 0
@@ -133,7 +139,7 @@ installed_version(){
 config_protocol(){
     awk -F= '
         /^[[:space:]]*\[/ { active=($0 ~ /^[[:space:]]*\[snell-server\][[:space:]]*$/); next }
-        active && $1 ~ /^[[:space:]]*version[[:space:]]*$/ { v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print v; exit }
+        active && tolower($1) ~ /^[[:space:]]*version[[:space:]]*$/ { v=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print v; exit }
     ' "$SNELL_CONF" 2>/dev/null
 }
 
@@ -486,10 +492,14 @@ artifact_fetch(){
     ui_progress 65 "校验二进制"
     binary="$extract/snell-server"
     if [ ! -f "$binary" ] || [ -L "$binary" ]; then ui_error "下载包内容无效"; return 1; fi
-    if [ "$rt_os" = alpine ] && upx -t "$binary" >/dev/null 2>&1; then
-        if ! upx -d -o "$extract/server.raw" "$binary" >/dev/null 2>&1 || ! mv -f "$extract/server.raw" "$binary"; then ui_error "Snell Server UPX 解包失败"; return 1; fi
-    fi
     kind=$(file -b "$binary" 2>/dev/null)
+    if [ "$rt_os" = alpine ]; then
+        if printf '%s' "$kind" | grep -qi 'UPX'; then
+            command -v upx >/dev/null 2>&1 || { ui_error "下载包为 UPX 压缩，请先安装 upx（apk add upx）"; return 1; }
+            if ! upx -d -o "$extract/server.raw" "$binary" >/dev/null 2>&1 || ! mv -f "$extract/server.raw" "$binary"; then ui_error "Snell Server UPX 解包失败"; return 1; fi
+            kind=$(file -b "$binary" 2>/dev/null)
+        fi
+    fi
     case "$rt_arch:$kind" in
         amd64:*ELF*x86-64*|i386:*ELF*80386*|aarch64:*ELF*aarch64*|armv7l:*ELF*ARM*) ;;
         *) ui_error "下载的二进制类型或架构不匹配"; return 1 ;;
@@ -546,6 +556,7 @@ config_load(){
         { key=$1; value=$0; sub(/^[^=]*=/,"",value); gsub(/^[[:space:]]+|[[:space:]]+$/,"",key); gsub(/^[[:space:]]+|[[:space:]]+$/,"",value); print key "=" value }
     ' "$SNELL_CONF" >"$parsed" || { rm -f "$parsed"; return 1; }
     while IFS='=' read -r key value; do
+        key=$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')
         case "$key" in
             listen) cfg_listen="$value" ;;
             psk) cfg_psk="$value" ;;
@@ -583,7 +594,8 @@ config_stage(){
     if [ -f "$SNELL_CONF" ]; then
         custom=$(awk -F= '
             /^[[:space:]]*\[/ { active=($0 ~ /^[[:space:]]*\[snell-server\][[:space:]]*$/); next }
-            active && $0 !~ /^[[:space:]#]*$/ { key=$1; gsub(/^[[:space:]]+|[[:space:]]+$/,"",key); if(key !~ /^(listen|psk|version|ipv6|obfs|obfs-host|tfo|dns-ip-preference|ipv-preference|mode|egress-interface)$/) print }
+            active && $0 ~ /^[[:space:]]*#[[:space:]]*psk([[:space:]=]|$)/ { next }
+            active && $0 !~ /^[[:space:]#]*$/ { key=$1; gsub(/^[[:space:]]+|[[:space:]]+$/,"",key); k=tolower(key); if(k !~ /^(listen|psk|version|ipv6|obfs|obfs-host|tfo|dns-ip-preference|ipv-preference|mode|egress-interface)$/) print }
         ' "$SNELL_CONF")
         other=$(awk '
             /^[[:space:]]*\[/ { active=($0 ~ /^[[:space:]]*\[snell-server\][[:space:]]*$/); if(!active) print; next }
@@ -734,7 +746,7 @@ transaction_apply(){
     ui_progress 100 "完成"
     trap - HUP INT TERM
     rm -rf "$tx_dir"
-    panel_major=""; panel_latest=""
+    panel_major=""; panel_latest=""; panel_retry=0
     state_refresh
     return 0
 }
@@ -831,6 +843,19 @@ edit_mode(){
     done
 }
 
+edit_egress(){
+    while true; do
+        ui_read "出口网卡（当前 ${cfg_egress:-未设置}，回车保留；输入 none 清除）："
+        [ -z "$REPLY" ] && return 0
+        case "$REPLY" in
+            none|off) cfg_egress=""; return 0 ;;
+        esac
+        cfg_egress="$REPLY"
+        config_validate >/dev/null 2>&1 && return 0
+        ui_error "网卡名称无效（≤15 位，仅字母数字及 . _ : -）"
+    done
+}
+
 edit_target_options(){
     if [ "$cfg_version" = 5 ]; then edit_obfs; edit_ipv6; else edit_dns_pref; edit_mode; fi
 }
@@ -856,7 +881,15 @@ header_render(){
     installed="${rt_version:-$rt_protocol}"; [ -n "$installed" ] || installed="?"; major=${installed%%.*}
     if [ "$major" = 5 ] || [ "$major" = 6 ]; then
         if [ "$panel_major" != "$major" ]; then
-            panel_latest=""; release_latest "$major" >/dev/null 2>&1 && panel_latest="$release_version"; panel_major="$major"
+            panel_latest=""
+            now=$(date +%s 2>/dev/null || printf '0')
+            if [ "$panel_retry" = 0 ] || [ "$now" -ge "$panel_retry" ]; then
+                if release_latest "$major" >/dev/null 2>&1; then
+                    panel_latest="$release_version"; panel_major="$major"
+                else
+                    panel_retry=$((now + 60))
+                fi
+            fi
         fi
     else panel_latest=""; panel_major="?"
     fi
@@ -908,7 +941,7 @@ action_install(){
     ui_warn "即将安装 Snell v${release_version}（协议 v${major}）"
     ui_confirm "确认安装？(Y/n)：" y || { ui_ok "已取消安装"; return 0; }
     config_reset "$major"
-    edit_port; edit_psk; edit_tfo; edit_target_options
+    edit_port; edit_psk; edit_tfo; edit_egress; edit_target_options
     transaction_apply install "$release_version" || return 1
     ui_ok "Snell v${release_version} 安装完成"
     view_config
@@ -937,9 +970,9 @@ action_config(){
         header_render
         printf '\n设置配置（协议 v%s）\n 1) 监听端口\n 2) 密钥\n' "$cfg_version"
         if [ "$cfg_version" = 5 ]; then printf ' 3) OBFS\n 4) OBFS 域名\n 5) 目标域名 IPv6 解析\n'; fi
-        printf ' 6) TCP Fast Open\n 7) 切换协议版本\n'
-        if [ "$cfg_version" = 6 ]; then printf ' 8) 目标地址 DNS IP 偏好\n 9) 混淆模式\n'; fi
-        printf '10) 全部配置\n\n'
+        printf ' 6) TCP Fast Open\n 7) 出口网卡\n 8) 切换协议版本\n'
+        if [ "$cfg_version" = 6 ]; then printf ' 9) 目标地址 DNS IP 偏好\n10) 混淆模式\n'; fi
+        printf '11) 全部配置\n\n'
         ui_read "按回车返回主菜单："; choice="$REPLY"; [ -n "$choice" ] || return 0
         case "$choice" in
             1) edit_port; commit_config ;;
@@ -960,23 +993,24 @@ action_config(){
                 fi
                 ;;
             6) edit_tfo; commit_config ;;
-            7)
+            7) edit_egress; commit_config ;;
+            8)
                 old="$cfg_version"
                 if switch_protocol && [ "$cfg_version" = "$old" ]; then ui_warn "协议版本未变更"; fi
                 ;;
-            8)
+            9)
                 if [ "$cfg_version" != 6 ]; then ui_error "当前协议不支持此项"
                 else edit_dns_pref; commit_config
                 fi
                 ;;
-            9)
+            10)
                 if [ "$cfg_version" != 6 ]; then ui_error "当前协议不支持此项"
                 else edit_mode; commit_config
                 fi
                 ;;
-            10)
+            11)
                 old="$cfg_version"; edit_version || continue
-                edit_port; edit_psk; edit_tfo; edit_target_options
+                edit_port; edit_psk; edit_tfo; edit_egress; edit_target_options
                 if [ "$cfg_version" = "$old" ]; then
                     commit_config
                 elif resolve_release "$cfg_version" && transaction_apply binary "$release_version"; then
@@ -985,7 +1019,7 @@ action_config(){
                     config_load >/dev/null 2>&1 || true
                 fi
                 ;;
-            *) ui_error "请输入 1-10" ;;
+            *) ui_error "请输入 1-11" ;;
         esac
     done
 }
