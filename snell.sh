@@ -1108,11 +1108,15 @@ public_ipv4(){
 }
 
 public_ipv6(){
-    public_v6=$(curl -fsSL6 --connect-timeout 2 --max-time 5 https://ifconfig.co 2>/dev/null | sed -n '1{s/[[:space:]]//g;p;q;}')
-    printf '%s\n' "$public_v6" | awk '
-        length($0)<2||length($0)>39||$0~/[^0-9A-Fa-f:]/{exit 1}
-        { c=index($0,"::")>0;t=$0;if(gsub(/::/,"",t)>1||$0~/:::/)exit 1;n=split($0,a,":");g=0;for(i=1;i<=n;i++)if(a[i]!=""){if(length(a[i])>4)exit 1;g++}if((c&&g>=8)||(!c&&g!=8))exit 1 }
-    ' || public_v6=""
+    local source
+    for source in https://ifconfig.co https://ipv6.icanhazip.com https://api6.ipify.org; do
+        public_v6=$(curl -fsSL6 --connect-timeout 2 --max-time 5 "$source" 2>/dev/null | sed -n '1{s/[[:space:]]//g;p;q;}')
+        printf '%s\n' "$public_v6" | awk '
+            length($0)<2||length($0)>39||$0~/[^0-9A-Fa-f:]/{exit 1}
+            { c=index($0,"::")>0;t=$0;if(gsub(/::/,"",t)>1||$0~/:::/)exit 1;n=split($0,a,":");g=0;for(i=1;i<=n;i++)if(a[i]!=""){if(length(a[i])>4)exit 1;g++}if((c&&g>=8)||(!c&&g!=8))exit 1 }
+        ' && return 0
+    done
+    public_v6=""
 }
 
 surge_line(){
