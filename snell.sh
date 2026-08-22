@@ -520,7 +520,7 @@ config_reset(){
 config_validate(){
     case "$cfg_version" in 5|6) ;; *) ui_error "协议版本无效"; return 1 ;; esac
     if [ -z "$cfg_listen" ] || ! printf '%s\n' "$cfg_listen" | awk -F, '
-        { for (i=1; i<=NF; i++) { p=$i; bad=0; for(j=1;j<=length(p);j++){c=substr(p,j,1); if(c !~ /[A-Za-z0-9_.:,]/ && c!="[" && c!="]" && c!="-") bad=1} q=p; sub(/^.*:/, "", q); if(bad || q !~ /^[0-9]+$/ || q + 0 < 1 || q + 0 > 65535) exit 1 } }
+        { for (i=1; i<=NF; i++) { p=$i; bad=0; for(j=1;j<=length(p);j++){c=substr(p,j,1); if(c !~ /[A-Za-z0-9_.:,]/ && c!="[" && c!="]" && c!="-") bad=1} q=p; sub(/^.*:/, "", q); a=p; sub(/:[^:]*$/, "", a); if(bad || q !~ /^[0-9]+$/ || q + 0 < 1 || q + 0 > 65535 || (a ~ /:/ && a !~ /^\[.*\]$/)) exit 1 } }
     '; then ui_error "监听地址格式无效"; return 1; fi
     if [ ${#cfg_psk} -lt 16 ] || [ ${#cfg_psk} -gt 255 ]; then ui_error "密钥必须为 16-255 位"; return 1; fi
     case "$cfg_psk" in *[!A-Za-z0-9._~-]*) ui_error "密钥包含不安全字符"; return 1 ;; esac
@@ -766,7 +766,18 @@ edit_port(){
         value="${REPLY:-${cfg_port:-8443}}"
         if ! printf '%s' "$value" | grep -qE '^[0-9]+$' || [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then ui_error "端口无效"; continue; fi
         if [ "$value" != "$original" ] && ss -H -tuln 2>/dev/null | grep -qE "[:.]${value}[[:space:]]"; then ui_error "端口 ${value} 已被占用"; continue; fi
-        cfg_port="$value"; cfg_listen="[::]:${value}"; return 0
+        cfg_port="$value"
+        cfg_listen=$(printf '%s\n' "$cfg_listen" | awk -F, -v port="$value" '
+            {
+                out=""
+                for (i=1; i<=NF; i++) {
+                    p=$i
+                    if (p ~ /:/) sub(/:[0-9]+$/, ":" port, p); else p=port
+                    out = out (i>1 ? "," : "") p
+                }
+                print out
+            }')
+        return 0
     done
 }
 
@@ -848,7 +859,7 @@ edit_egress(){
         ui_read "出口网卡（当前 ${cfg_egress:-未设置}，回车保留；输入 none 清除）："
         [ -z "$REPLY" ] && return 0
         case "$REPLY" in
-            none|off) cfg_egress=""; return 0 ;;
+            [Nn][Oo][Nn][Ee]|[Oo][Ff][Ff]) cfg_egress=""; return 0 ;;
         esac
         cfg_egress="$REPLY"
         config_validate >/dev/null 2>&1 && return 0
