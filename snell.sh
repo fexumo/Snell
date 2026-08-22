@@ -36,7 +36,7 @@ ui_read(){
     [ -n "$1" ] || printf '> '
     IFS= read -r REPLY || { printf '\n'; exit 0; }
 }
-ui_pause(){ printf '\n'; ui_read "按回车返回"; }
+ui_pause(){ printf '\n'; ui_read "按回车返回主菜单"; }
 ui_confirm(){
     local prompt="$1" default="${2:-n}"
     ui_read "$prompt"; REPLY="${REPLY:-$default}"
@@ -758,9 +758,17 @@ transaction_apply(){
 }
 
 ui_choose(){
-    local title="$1" current="$2" default="$3"
+    local title="$1" current="$2" default="$3" opt label=""
     shift 3; printf '\n%s\n' "$title"; printf '%s\n' "$@"
-    if [ -n "$current" ]; then ui_read "选择（当前 ${current}，回车保留）："; else ui_read "选择（默认 ${default}）："; fi
+    if [ -n "$current" ]; then
+        for opt in "$@"; do
+            case "$opt" in " $current)"*) label="${opt#" $current) "}" ;; esac
+        done
+        if [ -n "$label" ]; then ui_read "选择（当前 ${label}，回车保留）："
+        else ui_read "选择（当前 ${current}，回车保留）："
+        fi
+    else ui_read "选择（默认 ${default}）："
+    fi
     REPLY="${REPLY:-${current:-$default}}"
 }
 
@@ -863,8 +871,11 @@ edit_mode(){
 }
 
 edit_egress(){
+    local cur="$cfg_egress"
     while true; do
-        ui_read "出口网卡（当前 ${cfg_egress:-未设置}，回车保留；输入 none 清除）："
+        if [ -n "$cur" ]; then ui_read "出口网卡（当前 $cur，回车保留；输入 none 清除）："
+        else ui_read "出口网卡（当前未设置，回车保留；输入 none 清除）："
+        fi
         [ -z "$REPLY" ] && return 0
         case "$REPLY" in
             [Nn][Oo][Nn][Ee]|[Oo][Ff][Ff]) cfg_egress=""; return 0 ;;
@@ -892,11 +903,12 @@ header_render(){
     local status installed major
     ui_clear; printf '\n'
     state_refresh
+    printf '// snell server\n'
     if [ "$rt_installed" != true ]; then
-        [ "$rt_artifacts" = true ] && printf 'server: incomplete installation\n' || printf 'server: not installed\n'
+        [ "$rt_artifacts" = true ] && printf '安装不完整\n' || printf '未安装\n'
         return
     fi
-    status=stopped; [ "$rt_running" = true ] && status=running
+    status=已停止; [ "$rt_running" = true ] && status=运行中
     installed="${rt_version:-$rt_protocol}"; [ -n "$installed" ] || installed="?"; major=${installed%%.*}
     if [ "$major" = 5 ] || [ "$major" = 6 ]; then
         if [ "$panel_major" != "$major" ]; then
@@ -915,14 +927,14 @@ header_render(){
     if [ -n "$panel_latest" ] && [ -n "$rt_version" ]; then
         version_compare "$rt_version" "$panel_latest"
         if [ "$version_cmp" -lt 0 ]; then
-            printf 'server: installed v%s · update available v%s · %s\n' "$installed" "$panel_latest" "$status"
+            printf '已安装 v%s · 可更新 v%s · %s\n' "$installed" "$panel_latest" "$status"
         else
-            printf 'server: installed v%s · latest v%s · %s\n' "$installed" "$panel_latest" "$status"
+            printf '已安装 v%s · 最新 v%s · %s\n' "$installed" "$panel_latest" "$status"
         fi
     elif [ -n "$panel_latest" ]; then
-        printf 'server: installed protocol v%s · latest v%s · %s\n' "$installed" "$panel_latest" "$status"
+        printf '协议 v%s · 最新 v%s · %s\n' "$installed" "$panel_latest" "$status"
     else
-        printf 'server: installed v%s · %s\n' "$installed" "$status"
+        printf '已安装 v%s · %s\n' "$installed" "$status"
     fi
 }
 
@@ -992,7 +1004,7 @@ action_config(){
         printf ' 6) TCP Fast Open\n 7) 出口网卡\n 8) 切换协议版本\n'
         if [ "$cfg_version" = 6 ]; then printf ' 9) 目标地址 DNS IP 偏好\n10) 混淆模式\n'; fi
         printf '11) 全部配置\n\n'
-        ui_read "按回车返回主菜单："; choice="$REPLY"; [ -n "$choice" ] || return 0
+        ui_read "输入菜单项编号（回车返回主菜单）："; choice="$REPLY"; [ -n "$choice" ] || return 0
         case "$choice" in
             1) edit_port; commit_config ;;
             2) edit_psk; commit_config ;;
@@ -1112,7 +1124,7 @@ surge_line(){
 }
 
 view_config(){
-    local tmp address
+    local tmp address tfo_text ipv6_text obfs_text
     ui_progress 10 "读取配置"
     require_installed || return 1
     ui_progress 35 "获取公网地址"
@@ -1126,16 +1138,19 @@ view_config(){
     ui_progress 75 "生成 Surge 配置"
     address="${public_v4:-${public_v6:+[$public_v6]}}"
     header_render
-    printf '\n配置\n文件      : %s\n端口      : %s\n密钥      : %s\n协议      : v%s\nTFO       : %s\n' "$SNELL_CONF" "$cfg_port" "$cfg_psk" "$cfg_version" "$cfg_tfo"
+    tfo_text=关闭; [ "$cfg_tfo" = true ] && tfo_text=开启
+    printf '\n配置\n文件      : %s\n端口      : %s\n密钥      : %s\n协议      : v%s\nTFO       : %s\n' "$SNELL_CONF" "$cfg_port" "$cfg_psk" "$cfg_version" "$tfo_text"
     if [ "$cfg_version" = 5 ]; then
-        printf 'OBFS      : %s\n目标 IPv6 : %s\n' "$cfg_obfs" "$cfg_ipv6"
+        ipv6_text=关闭; [ "$cfg_ipv6" = true ] && ipv6_text=开启
+        obfs_text=关闭; [ "$cfg_obfs" = tls ] && obfs_text=TLS; [ "$cfg_obfs" = http ] && obfs_text=HTTP
+        printf 'OBFS      : %s\n目标 IPv6 : %s\n' "$obfs_text" "$ipv6_text"
         if [ "$cfg_obfs" != off ]; then printf '域名      : %s\n' "$cfg_host"; fi
     else
         printf '目标 DNS  : %s\n模式      : %s\n' "$cfg_dns_pref" "$cfg_mode"
     fi
     if [ -n "$cfg_egress" ]; then printf '出口网卡  : %s\n' "$cfg_egress"; fi
     printf '\nSurge 配置：\n'
-    if [ -n "$address" ]; then surge_line "$address"; else ui_error "无法获取公网 IP"; fi
+    if [ -n "$address" ]; then surge_line "$address"; else ui_error "无法获取公网 IP，请检查网络后重试"; fi
     ui_progress 100 "完成"
     ui_pause
 }
