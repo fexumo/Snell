@@ -36,7 +36,7 @@ ui_read(){
     [ -n "$1" ] || printf '> '
     IFS= read -r REPLY || { printf '\n'; exit 0; }
 }
-ui_pause(){ printf '\n'; ui_read "回车返回"; }
+ui_pause(){ printf '\n'; ui_read "按回车返回主菜单"; }
 ui_confirm(){
     local prompt="$1" default="${2:-n}"
     ui_read "$prompt"; REPLY="${REPLY:-$default}"
@@ -764,8 +764,8 @@ ui_choose(){
         for opt in "$@"; do
             case "$opt" in " $current)"*) label="${opt#" $current) "}" ;; esac
         done
-        if [ -n "$label" ]; then ui_read "选择（当前 ${label}）："
-        else ui_read "选择（当前 ${current}）："
+        if [ -n "$label" ]; then ui_read "选择（当前 ${label}，回车保留）："
+        else ui_read "选择（当前 ${current}，回车保留）："
         fi
     else ui_read "选择（默认 ${default}）："
     fi
@@ -784,7 +784,7 @@ edit_port(){
     local original="$cfg_port" value
     ui_warn "脚本不操作防火墙，请手动放行监听端口"
     while true; do
-        ui_read "端口（当前 ${cfg_port:-8443}）："
+        ui_read "端口 [1-65535]（当前 ${cfg_port:-8443}，回车保留）："
         value="${REPLY:-${cfg_port:-8443}}"
         if ! printf '%s' "$value" | grep -qE '^[0-9]+$' || [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then ui_error "端口无效"; continue; fi
         if [ "$value" != "$original" ] && ss -H -tuln 2>/dev/null | grep -qE "[:.]${value}[[:space:]]"; then ui_error "端口 ${value} 已被占用"; continue; fi
@@ -806,7 +806,7 @@ edit_port(){
 edit_psk(){
     local value
     while true; do
-        ui_read "密钥（回车随机生成）："
+        ui_read "密钥 [16-255 位]（回车随机生成 16 位）："
         if [ -z "$REPLY" ]; then
             value=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 16)
         else value="$REPLY"
@@ -814,7 +814,7 @@ edit_psk(){
         if [ ${#value} -ge 16 ] && [ ${#value} -le 255 ]; then
             case "$value" in *[!A-Za-z0-9]*) ;; *) cfg_psk="$value"; return 0 ;; esac
         fi
-        ui_error "密钥需 16-255 位，仅允许字母和数字"
+        ui_error "密钥需为 16-255 位，且仅允许字母和数字"
     done
 }
 
@@ -830,7 +830,7 @@ edit_tfo(){
 
 edit_host(){
     while true; do
-        ui_read "OBFS 域名（当前 ${cfg_host:-www.wechat.com}）："
+        ui_read "OBFS 域名（当前 ${cfg_host:-www.wechat.com}，回车保留）："
         [ -z "$REPLY" ] && REPLY="${cfg_host:-www.wechat.com}"
         cfg_host="$REPLY"
         config_validate >/dev/null 2>&1 && return 0
@@ -873,8 +873,8 @@ edit_mode(){
 edit_egress(){
     local cur="$cfg_egress"
     while true; do
-        if [ -n "$cur" ]; then ui_read "出口网卡（当前 $cur，none 清除）："
-        else ui_read "出口网卡（未设置，none 清除）："
+        if [ -n "$cur" ]; then ui_read "出口网卡（当前 $cur，回车保留；输入 none 清除）："
+        else ui_read "出口网卡（当前未设置，回车保留；输入 none 清除）："
         fi
         [ -z "$REPLY" ] && return 0
         case "$REPLY" in
@@ -903,7 +903,7 @@ header_render(){
     local status installed major
     ui_clear; printf '\n'
     state_refresh
-    printf '// snell-server\n'
+    printf '// snell server\n'
     if [ "$rt_installed" != true ]; then
         [ "$rt_artifacts" = true ] && printf '安装不完整\n' || printf '未安装\n'
         return
@@ -927,14 +927,14 @@ header_render(){
     if [ -n "$panel_latest" ] && [ -n "$rt_version" ]; then
         version_compare "$rt_version" "$panel_latest"
         if [ "$version_cmp" -lt 0 ]; then
-            printf 'v%s → v%s · %s\n' "$installed" "$panel_latest" "$status"
+            printf '已安装 v%s · 可更新 v%s · %s\n' "$installed" "$panel_latest" "$status"
         else
-            printf 'v%s · %s\n' "$installed" "$status"
+            printf '已安装 v%s · 最新 v%s · %s\n' "$installed" "$panel_latest" "$status"
         fi
     elif [ -n "$panel_latest" ]; then
-        printf 'v%s · 最新 v%s · %s\n' "$installed" "$panel_latest" "$status"
+        printf '协议 v%s · 最新 v%s · %s\n' "$installed" "$panel_latest" "$status"
     else
-        printf 'v%s · %s\n' "$installed" "$status"
+        printf '已安装 v%s · %s\n' "$installed" "$status"
     fi
 }
 
@@ -1004,7 +1004,7 @@ action_config(){
         printf ' 6) TCP Fast Open\n 7) 出口网卡\n 8) 切换协议版本\n'
         if [ "$cfg_version" = 6 ]; then printf ' 9) 目标地址 DNS IP 偏好\n10) 混淆模式\n'; fi
         printf '11) 全部配置\n\n'
-        ui_read "菜单项（回车返回）："; choice="$REPLY"; [ -n "$choice" ] || return 0
+        ui_read "输入菜单项编号（回车返回主菜单）："; choice="$REPLY"; [ -n "$choice" ] || return 0
         case "$choice" in
             1) edit_port; commit_config ;;
             2) edit_psk; commit_config ;;
