@@ -148,7 +148,6 @@ service_status(){
     case "$rt_backend" in
         systemd)
             [ -f "$SYSTEMD_UNIT" ] || return 1
-            systemctl show snell-server.service >/dev/null 2>&1 || return 1
             systemctl is-active snell-server.service >/dev/null 2>&1 && rt_running=true
             ;;
         openrc)
@@ -165,6 +164,10 @@ service_enabled(){
         systemd) systemctl is-enabled snell-server.service >/dev/null 2>&1 && rt_enabled=true ;;
         openrc) rc-update show default 2>/dev/null | grep -q '^[[:space:]]*snell-server[[:space:]]' && rt_enabled=true ;;
     esac
+}
+
+service_exists(){
+    if [ "$rt_backend" = systemd ]; then [ -f "$SYSTEMD_UNIT" ]; else [ -f "$OPENRC_INIT" ]; fi
 }
 
 service_ctl(){
@@ -225,6 +228,12 @@ state_refresh(){
     if [ -x "$SNELL_BIN" ] && [ -f "$SNELL_CONF" ] && config_load >/dev/null 2>&1; then
         rt_config_valid=true; rt_installed=true
     fi
+}
+
+require_installed(){
+    state_refresh
+    [ "$rt_installed" = true ] || { ui_error "请先安装 Snell Server"; return 1; }
+    config_load || return 1
 }
 
 stop_orphans(){
@@ -546,8 +555,8 @@ config_load(){
     [ -f "$SNELL_CONF" ] || { ui_error "配置文件不存在"; return 1; }
     local parsed key value first
     config_reset 5
-    cfg_listen=""; cfg_port=""; cfg_psk=""; cfg_version=""
-    parsed=$(mktemp /tmp/snell-config.XXXXXX) || return 1
+    cfg_listen=""; cfg_psk=""; cfg_version=""
+    parsed=$(mktemp) || return 1
     chmod 0600 "$parsed" || { rm -f "$parsed"; return 1; }
     awk -F= '
         /^[[:space:]]*#/ { next }
@@ -674,8 +683,9 @@ transaction_stage_abort(){
 }
 
 transaction_apply(){
-    local mode="$1" package_version="${2:-}"
+    local mode="$1" package_version="${2:-}" swap_bin=false
     tx_mode="$mode"; tx_was_running=false; tx_was_enabled=false; tx_had_service=false; tx_had_version=false; tx_account_created=false; tx_cfg=""
+    case "$mode" in install|binary) swap_bin=true ;; esac
     case "$mode" in install) ui_progress 18 "准备安装事务" ;; binary) ui_progress 18 "准备更新事务" ;; config) ui_progress 20 "准备配置事务" ;; reconcile) ui_progress 20 "协调服务定义" ;; esac
     if [ "$mode" != config ]; then runtime_refresh; fi
     if [ "$mode" = install ]; then
@@ -684,16 +694,12 @@ transaction_apply(){
     elif [ "$mode" = reconcile ]; then
         [ "$rt_installed" = true ] || return 1
         tx_was_running="$rt_running"; tx_was_enabled="$rt_enabled"
-        if [ "$rt_backend" = systemd ]; then [ -f "$SYSTEMD_UNIT" ] && tx_had_service=true
-        else [ -f "$OPENRC_INIT" ] && tx_had_service=true
-        fi
+        service_exists && tx_had_service=true
     else
         if [ ! -x "$SNELL_BIN" ] || [ ! -f "$SNELL_CONF" ]; then ui_error "Snell Server 未完整安装"; return 1; fi
         service_status || { ui_error "无法确认服务状态，操作已取消"; return 1; }
         tx_was_running="$rt_running"; tx_was_enabled="$rt_enabled"
-        if [ "$rt_backend" = systemd ]; then [ -f "$SYSTEMD_UNIT" ] && tx_had_service=true
-        else [ -f "$OPENRC_INIT" ] && tx_had_service=true
-        fi
+        service_exists && tx_had_service=true
         [ "$mode" != binary ] || ensure_dependencies || return 1
     fi
 
@@ -734,10 +740,10 @@ transaction_apply(){
     if [ "$mode" != install ] && [ "$tx_was_enabled" = false ]; then
         if ! service_set_enabled "$tx_was_enabled"; then transaction_rollback; return 1; fi
     fi
-    if [ "$mode" != config ] && [ "$mode" != reconcile ] && ! mv -f "$tx_dir/new" "$SNELL_BIN"; then transaction_rollback; return 1; fi
+    if [ "$swap_bin" = true ] && ! mv -f "$tx_dir/new" "$SNELL_BIN"; then transaction_rollback; return 1; fi
     if ! mv -f "$tx_cfg" "$SNELL_CONF"; then transaction_rollback; return 1; fi
     tx_cfg=""
-    if [ "$mode" != config ] && [ "$mode" != reconcile ] && ! version_write "$package_version"; then transaction_rollback; return 1; fi
+    if [ "$swap_bin" = true ] && ! version_write "$package_version"; then transaction_rollback; return 1; fi
 
     if [ "$mode" = install ] || [ "$tx_was_running" = true ]; then
         ui_progress 90 "启动服务"
@@ -756,6 +762,14 @@ ui_choose(){
     shift 3; printf '\n%s\n' "$title"; printf '%s\n' "$@"
     if [ -n "$current" ]; then ui_read "选择（当前 ${current}，回车保留）："; else ui_read "选择（默认 ${default}）："; fi
     REPLY="${REPLY:-${current:-$default}}"
+}
+
+ui_toggle(){
+    local title="$1" current="$2" default="$3"
+    while true; do
+        ui_choose "$title" "$current" "$default" " 1) 开启" " 2) 关闭"
+        case "$REPLY" in 1) return 0 ;; 2) return 1 ;; *) ui_error "仅支持 1 或 2" ;; esac
+    done
 }
 
 edit_port(){
@@ -798,18 +812,12 @@ edit_psk(){
 
 edit_ipv6(){
     local current=2; [ "$cfg_ipv6" = true ] && current=1
-    while true; do
-        ui_choose "目标域名 IPv6 解析" "$current" 2 " 1) 开启" " 2) 关闭"
-        case "$REPLY" in 1) cfg_ipv6=true; return ;; 2) cfg_ipv6=false; return ;; *) ui_error "仅支持 1 或 2" ;; esac
-    done
+    if ui_toggle "目标域名 IPv6 解析" "$current" 2; then cfg_ipv6=true; else cfg_ipv6=false; fi
 }
 
 edit_tfo(){
     local current=1; [ "$cfg_tfo" = false ] && current=2
-    while true; do
-        ui_choose "TCP Fast Open" "$current" 1 " 1) 开启" " 2) 关闭"
-        case "$REPLY" in 1) cfg_tfo=true; return ;; 2) cfg_tfo=false; return ;; *) ui_error "仅支持 1 或 2" ;; esac
-    done
+    if ui_toggle "TCP Fast Open" "$current" 1; then cfg_tfo=true; else cfg_tfo=false; fi
 }
 
 edit_host(){
@@ -975,7 +983,7 @@ switch_protocol(){
 
 action_config(){
     local choice old
-    state_refresh; [ "$rt_installed" = true ] || { ui_error "请先安装 Snell Server"; return 1; }
+    require_installed || return 1
     while true; do
         config_load || return 1
         header_render
@@ -1037,8 +1045,7 @@ action_config(){
 
 action_update(){
     local latest old
-    state_refresh; [ "$rt_installed" = true ] || { ui_error "请先安装 Snell Server"; return 1; }
-    config_load || return 1
+    require_installed || return 1
     if [ "$cfg_version" = 5 ]; then
         old=5; cfg_version=6
         ui_warn "更新操作将从协议 v5 升级至 v6"
@@ -1107,10 +1114,9 @@ surge_line(){
 view_config(){
     local tmp address
     ui_progress 10 "读取配置"
-    state_refresh; [ "$rt_installed" = true ] || { ui_error "请先安装 Snell Server"; return 1; }
-    config_load || return 1
+    require_installed || return 1
     ui_progress 35 "获取公网地址"
-    tmp=$(mktemp -d /tmp/snell-address.XXXXXX) || return 1
+    tmp=$(mktemp -d) || return 1
     trap 'rm -rf "$tmp"; exit 130' HUP INT TERM
     ( public_ipv4; printf '%s\n' "$public_v4" >"$tmp/v4" ) &
     ( public_ipv6; printf '%s\n' "$public_v6" >"$tmp/v6" ) &
@@ -1137,8 +1143,7 @@ view_config(){
 view_status(){
     local pid started service_text log_command
     ui_progress 10 "读取服务状态"
-    state_refresh; [ "$rt_installed" = true ] || { ui_error "请先安装 Snell Server"; return 1; }
-    config_load || return 1
+    require_installed || return 1
     ui_progress 70 "整理状态信息"
     header_render
     service_text="已停止"; [ "$rt_running" = true ] && service_text="运行中"
@@ -1166,7 +1171,7 @@ main_menu(){
     while true; do
         header_render
         printf '\n 1) 安装服务    2) 启动服务\n 3) 停止服务    4) 重启服务\n 5) 设置配置    6) 查看配置\n 7) 查看状态    8) 更新服务\n 9) 卸载服务    0) 退出脚本\n\n'
-    ui_read "请输入选项 [0-9]: "
+        ui_read "请输入选项 [0-9]: "
         case "$REPLY" in
             0) ui_ok "已退出脚本"; exit 0 ;;
             1) action_install ;;
